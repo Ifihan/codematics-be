@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8080
 
     secret_key: str
     algorithm: str = "HS256"
