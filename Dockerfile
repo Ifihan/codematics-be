@@ -22,11 +22,12 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies
 RUN uv sync --frozen --no-dev
 
-# Use virtual environment
-ENV PATH="/app/.venv/bin:$PATH"
-
 # Copy application code
 COPY . .
+
+# Use virtual environment and add app to Python path
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app:$PYTHONPATH"
 
 # Copy and set entrypoint permissions
 COPY entrypoint.sh ./
