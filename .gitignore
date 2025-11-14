@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment variables
+.env
+
+# Database
+*.db
+*.db-journal
+
+# Test files
+tests/
+*.test.py
+test_*.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated files
+main.py
+requirements.txt
+generated/
+storage/
+
+# Logs
+*.log
