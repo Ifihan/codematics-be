@@ -36,5 +36,6 @@ storage/
 *.log
 
 gcp-key.json
+gcp-key-base64.txt
 
 .DS_Store
