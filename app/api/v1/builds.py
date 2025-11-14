@@ -94,6 +94,8 @@ async def trigger_build(
 
 def execute_build(build_id: int, db: Session):
     """Execute build in background"""
+    import time
+
     build = db.query(Build).filter(Build.id == build_id).first()
     if not build:
         return
@@ -105,15 +107,55 @@ def execute_build(build_id: int, db: Session):
 
         cloud_build_service = CloudBuildService()
 
-        operation = cloud_build_service.trigger_build(
+        build_result = cloud_build_service.trigger_build(
             source_bucket=build.source_bucket,
             source_object=build.source_object,
             image_name=build.image_name
         )
 
-        build.build_id = operation.id
-        build.log_url = operation.log_url if hasattr(operation, 'log_url') else None
+        build.build_id = build_result.metadata.build.id
+        build.log_url = f"https://console.cloud.google.com/cloud-build/builds/{build_result.metadata.build.id}?project={settings.gcp_project_id}"
         db.commit()
+
+        while True:
+            build_status = cloud_build_service.get_build(build_result.metadata.build.id)
+            status_value = build_status.status
+
+            if status_value == 1:
+                time.sleep(5)
+            elif status_value == 2:
+                time.sleep(5)
+            elif status_value == 3:
+                build.status = "success"
+                build.finished_at = datetime.utcnow()
+                db.commit()
+                break
+            elif status_value == 4:
+                build.status = "failed"
+                build.error_message = "Build failed"
+                build.finished_at = datetime.utcnow()
+                db.commit()
+                break
+            elif status_value == 5:
+                build.status = "failed"
+                build.error_message = "Build internal error"
+                build.finished_at = datetime.utcnow()
+                db.commit()
+                break
+            elif status_value == 6:
+                build.status = "failed"
+                build.error_message = "Build timeout"
+                build.finished_at = datetime.utcnow()
+                db.commit()
+                break
+            elif status_value == 7:
+                build.status = "failed"
+                build.error_message = "Build cancelled"
+                build.finished_at = datetime.utcnow()
+                db.commit()
+                break
+            else:
+                time.sleep(5)
 
     except Exception as e:
         build.status = "failed"
@@ -179,3 +221,97 @@ def list_notebook_builds(
     ).order_by(Build.created_at.desc()).all()
 
     return builds
+
+
+@router.post("/{build_id}/refresh", response_model=BuildResponse)
+def refresh_build_status(
+    build_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Manually refresh build status from Cloud Build"""
+    check_gcp_configured()
+
+    build = db.query(Build).join(Notebook).filter(
+        Build.id == build_id,
+        Notebook.user_id == current_user.id
+    ).first()
+
+    if not build:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Build not found"
+        )
+
+    try:
+        cloud_build_service = CloudBuildService()
+        build_status = cloud_build_service.get_build(build.build_id)
+        status_value = build_status.status
+
+        if status_value == 3:
+            build.status = "success"
+            build.finished_at = datetime.utcnow()
+        elif status_value in [4, 5, 6, 7]:
+            build.status = "failed"
+            error_messages = {4: "Build failed", 5: "Internal error", 6: "Timeout", 7: "Cancelled"}
+            build.error_message = error_messages.get(status_value, "Unknown error")
+            build.finished_at = datetime.utcnow()
+        elif status_value in [1, 2]:
+            build.status = "building"
+
+        db.commit()
+        db.refresh(build)
+
+        return build
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to refresh status: {str(e)}"
+        )
+
+
+@router.get("/{build_id}/logs")
+def get_build_logs(
+    build_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get build logs from Cloud Build"""
+    check_gcp_configured()
+
+    build = db.query(Build).join(Notebook).filter(
+        Build.id == build_id,
+        Notebook.user_id == current_user.id
+    ).first()
+
+    if not build:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Build not found"
+        )
+
+    try:
+        cloud_build_service = CloudBuildService()
+        build_details = cloud_build_service.get_build(build.build_id)
+
+        return {
+            "build_id": build.build_id,
+            "status": build.status,
+            "error_message": build.error_message,
+            "log_url": build.log_url,
+            "gcp_build_status": str(build_details.status) if build_details else None,
+            "steps": [
+                {
+                    "name": step.name,
+                    "status": str(step.status) if hasattr(step, 'status') else None
+                }
+                for step in (build_details.steps if build_details else [])
+            ]
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch logs: {str(e)}"
+        )

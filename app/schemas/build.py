@@ -17,6 +17,7 @@ class BuildResponse(BaseModel):
     status: str
     image_name: str
     log_url: Optional[str]
+    error_message: Optional[str] = None
     created_at: datetime
     started_at: Optional[datetime]
     finished_at: Optional[datetime]

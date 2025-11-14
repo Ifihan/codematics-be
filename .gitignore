@@ -17,7 +17,6 @@ wheels/
 *.db-journal
 
 # Test files
-tests/
 *.test.py
 test_*.py
 
@@ -35,3 +34,7 @@ storage/
 
 # Logs
 *.log
+
+gcp-key.json
+
+.DS_Store

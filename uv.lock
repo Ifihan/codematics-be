@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -471,7 +471,9 @@ dependencies = [
     { name = "fastapi" },
     { name = "google-auth" },
     { name = "google-cloud-build" },
+    { name = "google-cloud-run" },
     { name = "google-cloud-storage" },
+    { name = "grpc-google-iam-v1" },
     { name = "jupyter" },
     { name = "nbconvert" },
     { name = "psycopg2-binary" },
@@ -494,7 +496,9 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.121.2" },
     { name = "google-auth", specifier = ">=2.43.0" },
     { name = "google-cloud-build", specifier = ">=3.33.0" },
+    { name = "google-cloud-run", specifier = ">=0.12.0" },
     { name = "google-cloud-storage", specifier = ">=3.5.0" },
+    { name = "grpc-google-iam-v1", specifier = ">=0.14.3" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "psycopg2-binary", specifier = ">=2.9.11" },
@@ -771,6 +775,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a6/03/ef0bc99d0e0faf4fdbe67ac445e18cdaa74824fd93cd069e7bb6548cb52d/google_cloud_core-2.5.0.tar.gz", hash = "sha256:7c1b7ef5c92311717bd05301aa1a91ffbc565673d3b0b4163a52d8413a186963", size = 36027, upload-time = "2025-10-29T23:17:39.513Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/89/20/bfa472e327c8edee00f04beecc80baeddd2ab33ee0e86fd7654da49d45e9/google_cloud_core-2.5.0-py3-none-any.whl", hash = "sha256:67d977b41ae6c7211ee830c7912e41003ea8194bff15ae7d72fd6f51e57acabc", size = 29469, upload-time = "2025-10-29T23:17:38.548Z" },
+]
+
+[[package]]
+name = "google-cloud-run"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpc-google-iam-v1" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/f2/11883b47c445367746ad7451c54b2e82870b1c71049ba612bcff66647bd4/google_cloud_run-0.12.0.tar.gz", hash = "sha256:b97ac4c4abdb495f49163105494cc9f95d7a07b9dd8d5f4fdb3fb0f3a674325e", size = 434903, upload-time = "2025-10-20T14:57:03.745Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/ca/b0e3eed15f97d292ab64e95f86946ca0aa93be3729fae63258ce90a58695/google_cloud_run-0.12.0-py3-none-any.whl", hash = "sha256:396d52c366a2febdd9be806813f71fc7701262458674f376fe649f92a25652f1", size = 397677, upload-time = "2025-10-20T14:53:48.336Z" },
 ]
 
 [[package]]

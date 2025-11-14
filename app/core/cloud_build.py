@@ -90,15 +90,17 @@ class CloudBuildService:
             substitutions=substitutions or {}
         )
 
-        parent = f"projects/{self.project_id}/locations/{self.region}"
         operation = self.client.create_build(project_id=self.project_id, build=build)
 
-        return operation.metadata
+        return operation
 
     def get_build(self, build_id: str) -> Build:
         """Get build status"""
-        name = f"projects/{self.project_id}/locations/{self.region}/builds/{build_id}"
-        return self.client.get_build(name=name)
+        request = cloudbuild_v1.GetBuildRequest(
+            project_id=self.project_id,
+            id=build_id
+        )
+        return self.client.get_build(request=request)
 
     def list_builds(self, limit: int = 10) -> List[Build]:
         """List recent builds"""
