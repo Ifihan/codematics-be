@@ -15,6 +15,7 @@ RUN chmod +x /entrypoint.sh
 
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8080
 
