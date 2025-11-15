@@ -2,38 +2,32 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PORT=8080
-
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    gcc \
     libpq-dev \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
+# Install uv for faster package installation
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files first for better layer caching
+# Copy dependency files
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies
-RUN uv sync --frozen --no-dev
+# Install Python dependencies directly to system (no venv)
+RUN uv pip install --system --no-cache -r pyproject.toml
 
 # Copy application code
 COPY . .
 
-# Use virtual environment
-ENV PATH="/app/.venv/bin:$PATH"
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
 
 # Copy and set entrypoint permissions
 COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
-
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-USER appuser
 
 EXPOSE 8080
 

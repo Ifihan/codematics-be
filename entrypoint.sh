@@ -2,9 +2,6 @@
 
 set -e
 
-# Set Python path to include the app directory
-export PYTHONPATH=/app:$PYTHONPATH
-
 echo "Running database migrations..."
 alembic upgrade head || echo "Migration failed, continuing anyway..."
 
