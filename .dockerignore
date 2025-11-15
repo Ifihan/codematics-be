@@ -1,0 +1,50 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Tests
+tests/
+*.test.py
+test_*.py
+
+# Local database
+*.db
+*.db-journal
+
+# Logs
+*.log
+
+# Environment (will be set via Cloud Run)
+.env
+
+# Generated/temporary files
+generated/
+storage/
+gcp-key.json
+gcp-key-base64.txt
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+*.egg-info
