@@ -9,12 +9,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+# Copy dependency files
+COPY pyproject.toml uv.lock* README.md ./
 
-RUN mkdir -p app && touch app/__init__.py
+# Install uv
+RUN pip install --no-cache-dir uv
 
-RUN pip install --no-cache-dir -e .
+# Install Python dependencies using uv
+RUN uv pip install --system --no-cache .
 
+# Copy application code
 COPY . .
 
 # Set environment variables
