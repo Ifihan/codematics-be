@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     gcp_service_account_key_base64: Optional[str] = None
     gcp_bucket_name: Optional[str] = None
 
+    github_webhook_secret: Optional[str] = None
+    gitlab_webhook_secret: Optional[str] = None
+
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
 
     model_config = SettingsConfigDict(
