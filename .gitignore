@@ -27,7 +27,7 @@ test_*.py
 *.swo
 
 # Generated files
-main.py
+# main.py
 requirements.txt
 generated/
 storage/
