@@ -9,28 +9,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for faster package installation
-RUN pip install --no-cache-dir uv
+COPY pyproject.toml ./
 
-# Copy dependency files
-COPY pyproject.toml uv.lock ./
+RUN mkdir -p app && touch app/__init__.py
 
-# Install Python dependencies directly to system (no venv)
-RUN uv pip install --system --no-cache .
+RUN pip install --no-cache-dir -e .
 
-# Copy application code
 COPY . .
 
 # Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PORT=8080
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8080 \
+    PYTHONPATH=/app
 
-# Copy and set entrypoint permissions
-COPY entrypoint.sh ./
+# Make entrypoint executable
 RUN chmod +x entrypoint.sh
 
 EXPOSE 8080
 
 CMD ["./entrypoint.sh"]
-
-
