@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
 
 # Install Python dependencies directly to system (no venv)
-RUN uv pip install --system --no-cache -r pyproject.toml
+RUN uv pip install --system --no-cache .
 
 # Copy application code
 COPY . .
@@ -32,3 +32,5 @@ RUN chmod +x entrypoint.sh
 EXPOSE 8080
 
 CMD ["./entrypoint.sh"]
+
+

@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
-    database_url: str = "sqlite:///./notebook_to_cloud.db"
+    database_url: str = "sqlite:////tmp/db/notebook_to_cloud.db"
 
     gcp_project_id: Optional[str] = None
     gcp_region: Optional[str] = "us-central1"
@@ -35,24 +35,23 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
-    @field_validator('gcp_service_account_key', mode='before')
+    @field_validator("gcp_service_account_key", mode="before")
     @classmethod
     def decode_service_account_key(cls, v, info):
         """Decode base64 service account key if base64 version is provided"""
-        base64_key = info.data.get('gcp_service_account_key_base64')
+        base64_key = info.data.get("gcp_service_account_key_base64")
 
         if base64_key and not v:
             try:
                 decoded = base64.b64decode(base64_key)
                 key_data = json.loads(decoded)
 
-                temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
+                temp_file = tempfile.NamedTemporaryFile(
+                    mode="w", delete=False, suffix=".json"
+                )
                 json.dump(key_data, temp_file)
                 temp_file.close()
 
