@@ -35,15 +35,15 @@ class CloudBuildService:
         config = {
             'steps': [
                 {
-                    'name': 'gcr.io/cloud-builders/gcloud',
-                    'args': [
-                        'builds', 'submit',
-                        '--pack',
-                        f'image={image_name}',
-                        '--default-buckets-behavior=regional-user-owned-bucket'
-                    ]
+                    'name': 'gcr.io/cloud-builders/docker',
+                    'args': ['build', '-t', image_name, '.']
+                },
+                {
+                    'name': 'gcr.io/cloud-builders/docker',
+                    'args': ['push', image_name]
                 }
             ],
+            'images': [image_name],
             'options': {
                 'logging': 'CLOUD_LOGGING_ONLY',
                 'machineType': 'E2_HIGHCPU_8'
@@ -67,12 +67,21 @@ class CloudBuildService:
         """Trigger a Cloud Build"""
         build = Build(
             steps=[
+                # Build the container image
                 BuildStep(
-                    name='gcr.io/cloud-builders/gcloud',
+                    name='gcr.io/cloud-builders/docker',
                     args=[
-                        'builds', 'submit',
-                        '--pack',
-                        f'image={image_name}',
+                        'build',
+                        '-t', image_name,
+                        '.'
+                    ]
+                ),
+                # Push the container image
+                BuildStep(
+                    name='gcr.io/cloud-builders/docker',
+                    args=[
+                        'push',
+                        image_name
                     ]
                 )
             ],
@@ -87,6 +96,7 @@ class CloudBuildService:
                 machine_type='E2_HIGHCPU_8'
             ),
             timeout='1200s',
+            images=[image_name],
             substitutions=substitutions or {}
         )
 

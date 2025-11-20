@@ -130,4 +130,53 @@ class DependencyExtractor:
             "dependencies_count": len(dependencies),
             "requirements_txt_content": requirements_content,
             "requirements_txt_path": str(requirements_path) if requirements_path else None,
+            "has_fastapi_app": self.has_fastapi_app(),
+            "has_uvicorn_run": self.has_uvicorn_run(),
+            "fastapi_app_name": self.get_fastapi_app_name()
         }
+
+    def has_fastapi_app(self) -> bool:
+        """Check if code instantiates FastAPI"""
+        if not self.tree:
+            self.parse_ast()
+
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Assign):
+                if isinstance(node.value, ast.Call):
+                    if isinstance(node.value.func, ast.Name) and node.value.func.id == 'FastAPI':
+                        return True
+                    if isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'FastAPI':
+                        return True
+        return False
+
+    def get_fastapi_app_name(self) -> Optional[str]:
+        """Get the variable name of the FastAPI instance"""
+        if not self.tree:
+            self.parse_ast()
+
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Assign):
+                if isinstance(node.value, ast.Call):
+                    is_fastapi = False
+                    if isinstance(node.value.func, ast.Name) and node.value.func.id == 'FastAPI':
+                        is_fastapi = True
+                    elif isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'FastAPI':
+                        is_fastapi = True
+                    
+                    if is_fastapi:
+                        for target in node.targets:
+                            if isinstance(target, ast.Name):
+                                return target.id
+        return None
+
+    def has_uvicorn_run(self) -> bool:
+        """Check if code calls uvicorn.run"""
+        if not self.tree:
+            self.parse_ast()
+
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    if node.func.attr == 'run' and isinstance(node.func.value, ast.Name) and node.func.value.id == 'uvicorn':
+                        return True
+        return False

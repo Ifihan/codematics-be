@@ -55,6 +55,37 @@ class NotebookService:
         extractor = DependencyExtractor(file_path=parse_result['main_py_path'])
         deps_result = extractor.analyze(str(output_dir))
 
+        # Inject startup code if needed
+        if deps_result.get('has_fastapi_app') and not deps_result.get('has_uvicorn_run'):
+            app_name = deps_result.get('fastapi_app_name', 'app')
+            startup_code = f"""
+
+# Auto-generated startup code
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run({app_name}, host="0.0.0.0", port=port)
+"""
+            with open(parse_result['main_py_path'], 'a', encoding='utf-8') as f:
+                f.write(startup_code)
+            
+            # Ensure uvicorn is in requirements
+            if 'uvicorn' not in deps_result['dependencies']:
+                deps_result['dependencies'].append('uvicorn')
+                deps_result['dependencies'].sort()
+                
+                # Regenerate requirements.txt
+                req_path = deps_result['requirements_txt_path']
+                if req_path:
+                    with open(req_path, 'w', encoding='utf-8') as f:
+                        f.write("\n".join(deps_result['dependencies']) + "\n")
+
+        # Generate Procfile
+        procfile_path = output_dir / "Procfile"
+        with open(procfile_path, 'w', encoding='utf-8') as f:
+            f.write("web: python main.py")
+
         notebook.status = "parsed"
         notebook.main_py_path = parse_result['main_py_path']
         notebook.requirements_txt_path = deps_result['requirements_txt_path']

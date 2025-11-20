@@ -72,7 +72,12 @@ class CloudRunService:
             )
 
             operation = self.client.update_service(service=service)
-            return operation.result()
+            result = operation.result()
+
+            if allow_unauthenticated:
+                self.set_iam_policy(service_name, allow_public=True)
+
+            return result
         except Exception:
             service = Service(
                 template={
@@ -91,7 +96,12 @@ class CloudRunService:
             )
 
             operation = self.client.create_service(parent=parent, service=service, service_id=service_name)
-            return operation.result()
+            result = operation.result()
+
+            if allow_unauthenticated:
+                self.set_iam_policy(service_name, allow_public=True)
+
+            return result
 
     def get_service(self, service_name: str) -> Service:
         """Get Cloud Run service details"""
@@ -148,15 +158,28 @@ class CloudRunService:
         service_path = f"projects/{self.project_id}/locations/{self.region}/services/{service_name}"
 
         if allow_public:
-            policy = policy_pb2.Policy(
-                bindings=[
-                    policy_pb2.Binding(
-                        role="roles/run.invoker",
-                        members=["allUsers"]
-                    )
-                ]
-            )
+            # Get existing policy
+            request = iam_policy_pb2.GetIamPolicyRequest(resource=service_path)
+            policy = self.client.get_iam_policy(request=request)
 
+            # Check if binding already exists
+            binding_exists = False
+            for binding in policy.bindings:
+                if binding.role == "roles/run.invoker":
+                    if "allUsers" not in binding.members:
+                        binding.members.append("allUsers")
+                    binding_exists = True
+                    break
+
+            # Add binding if it doesn't exist
+            if not binding_exists:
+                binding = policy_pb2.Binding(
+                    role="roles/run.invoker",
+                    members=["allUsers"]
+                )
+                policy.bindings.append(binding)
+
+            # Update policy
             request = iam_policy_pb2.SetIamPolicyRequest(
                 resource=service_path,
                 policy=policy

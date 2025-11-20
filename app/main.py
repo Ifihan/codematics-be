@@ -4,13 +4,20 @@ from app.config import settings
 from app.api.v1 import auth, notebooks, builds, deployments, webhooks, metrics, admin, pipeline
 from app.db.database import Base, engine
 
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     debug=settings.debug
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup (non-blocking)"""
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        # Log error but don't fail startup
+        print(f"Warning: Database initialization failed: {e}")
 
 app.add_middleware(
     CORSMiddleware,

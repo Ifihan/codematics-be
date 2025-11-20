@@ -1,4 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, UploadFile, File
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    BackgroundTasks,
+    UploadFile,
+    File,
+)
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
@@ -24,6 +32,7 @@ router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 class PipelineRequest(BaseModel):
     """One-click deployment request"""
+
     cpu: str = "1"
     memory: str = "512Mi"
     min_instances: int = 0
@@ -33,6 +42,7 @@ class PipelineRequest(BaseModel):
 
 class PipelineStatus(BaseModel):
     """Pipeline execution status"""
+
     pipeline_id: str
     notebook_id: Optional[int]
     build_id: Optional[int]
@@ -45,6 +55,7 @@ class PipelineStatus(BaseModel):
 
 class PipelineResponse(BaseModel):
     """Pipeline response"""
+
     pipeline_id: str
     notebook_id: int
     status: str
@@ -60,20 +71,20 @@ async def one_click_deploy(
     min_instances: int = 0,
     max_instances: int = 10,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """One-click deploy: Upload notebook and automatically build & deploy"""
 
-    if not file.filename.endswith('.ipynb'):
+    if not file.filename.endswith(".ipynb"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only .ipynb files are allowed"
+            detail="Only .ipynb files are allowed",
         )
 
     user_dir = Path(f"uploads/user_{current_user.id}")
     user_dir.mkdir(parents=True, exist_ok=True)
 
-    notebook_name = file.filename.replace('.ipynb', '')
+    notebook_name = file.filename.replace(".ipynb", "")
     file_path = user_dir / file.filename
 
     with open(file_path, "wb") as buffer:
@@ -84,7 +95,7 @@ async def one_click_deploy(
         filename=file.filename,
         file_path=str(file_path),
         user_id=current_user.id,
-        status="uploaded"
+        status="uploaded",
     )
 
     db.add(notebook)
@@ -100,14 +111,14 @@ async def one_click_deploy(
         cpu,
         memory,
         min_instances,
-        max_instances
+        max_instances,
     )
 
     return PipelineResponse(
         pipeline_id=pipeline_id,
         notebook_id=notebook.id,
         status="processing",
-        message="Pipeline started. Use /pipeline/status/{pipeline_id} to track progress."
+        message="Pipeline started. Use /pipeline/status/{pipeline_id} to track progress.",
     )
 
 
@@ -117,7 +128,7 @@ def execute_pipeline(
     cpu: str,
     memory: str,
     min_instances: int,
-    max_instances: int
+    max_instances: int,
 ):
     """Execute the complete deployment pipeline"""
     from app.db.database import SessionLocal
@@ -158,9 +169,86 @@ def execute_pipeline(
         extractor.generate_requirements_txt(str(requirements_path))
         notebook.requirements_txt_path = str(requirements_path)
 
+        # Detect app type and generate appropriate Procfile
+        has_fastapi = "fastapi" in [dep.lower() for dep in dependencies]
+        has_streamlit = "streamlit" in [dep.lower() for dep in dependencies]
+        has_flask = "flask" in [dep.lower() for dep in dependencies]
+        
+        # Check if main.py has uvicorn.run or app startup code
+        main_py_content = main_py_path.read_text(encoding='utf-8')
+        has_uvicorn_run = "uvicorn.run" in main_py_content
+        has_fastapi_app = "FastAPI()" in main_py_content or "= FastAPI(" in main_py_content
+        
         procfile_path = notebook_dir / "Procfile"
-        with open(procfile_path, "w") as f:
-            f.write("web: streamlit run main.py --server.port=$PORT --server.address=0.0.0.0")
+        
+        # Generate Dockerfile based on app type
+        dockerfile_content = """
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential \\
+    curl \\
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+ENV PORT=8080
+"""
+
+        if has_fastapi:
+            # FastAPI app
+            if not has_uvicorn_run and has_fastapi_app:
+                # Inject startup code
+                startup_code = '''
+
+# Auto-generated startup code
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+'''
+                with open(main_py_path, 'a', encoding='utf-8') as f:
+                    f.write(startup_code)
+                
+                # Ensure uvicorn is in dependencies
+                if 'uvicorn' not in dependencies:
+                    dependencies.append('uvicorn')
+                    dependencies.sort()
+                    notebook.dependencies = dependencies
+                    with open(requirements_path, 'w', encoding='utf-8') as f:
+                        f.write("\n".join(dependencies) + "\n")
+            
+            dockerfile_content += '\nCMD ["python", "main.py"]'
+                
+        elif has_flask:
+            # Flask app
+            dockerfile_content += '\nCMD ["python", "main.py"]'
+                
+        else:
+            # Streamlit or Generic Python app
+            # Default to Streamlit for generic notebooks
+            
+            # Ensure streamlit is in dependencies
+            if 'streamlit' not in dependencies:
+                dependencies.append('streamlit')
+                dependencies.sort()
+                notebook.dependencies = dependencies
+                with open(requirements_path, 'w', encoding='utf-8') as f:
+                    f.write("\n".join(dependencies) + "\n")
+            
+            dockerfile_content += '\nEXPOSE 8080\nCMD ["streamlit", "run", "main.py", "--server.port=8080", "--server.address=0.0.0.0"]'
+
+        # Write Dockerfile
+        dockerfile_path = notebook_dir / "Dockerfile"
+        with open(dockerfile_path, "w") as f:
+            f.write(dockerfile_content)
 
         notebook.status = "parsed"
         notebook.parsed_at = datetime.utcnow()
@@ -183,7 +271,7 @@ def execute_pipeline(
             status="queued",
             image_name=image_name,
             source_bucket=settings.gcp_bucket_name,
-            source_object=source_object
+            source_object=source_object,
         )
 
         db.add(build)
@@ -198,7 +286,7 @@ def execute_pipeline(
         build_result = cloud_build_service.trigger_build(
             source_bucket=build.source_bucket,
             source_object=build.source_object,
-            image_name=build.image_name
+            image_name=build.image_name,
         )
 
         build.build_id = build_result.metadata.build.id
@@ -232,7 +320,7 @@ def execute_pipeline(
             build_id=build.id,
             service_name=service_name,
             status="deploying",
-            image_uri=build.image_name
+            image_uri=build.image_name,
         )
 
         db.add(deployment)
@@ -243,18 +331,23 @@ def execute_pipeline(
         service = cloud_run_service.create_or_update_service(
             service_name=deployment.service_name,
             image_uri=deployment.image_uri,
+            env_vars={},
             cpu=cpu,
             memory=memory,
             min_instances=min_instances,
             max_instances=max_instances,
-            allow_unauthenticated=True
+            allow_unauthenticated=True,
         )
 
         cloud_run_service.set_iam_policy(deployment.service_name, allow_public=True)
 
         deployment.status = "deployed"
         deployment.service_url = service.uri
-        deployment.revision_name = service.latest_created_revision if hasattr(service, 'latest_created_revision') else None
+        deployment.revision_name = (
+            service.latest_created_revision
+            if hasattr(service, "latest_created_revision")
+            else None
+        )
         deployment.deployed_at = datetime.utcnow()
         db.commit()
 
@@ -269,13 +362,13 @@ def execute_pipeline(
         notebook.status = "failed"
         db.commit()
 
-        if 'build' in locals():
+        if "build" in locals():
             build.status = "failed"
             build.error_message = str(e)
             build.finished_at = datetime.utcnow()
             db.commit()
 
-        if 'deployment' in locals():
+        if "deployment" in locals():
             deployment.status = "failed"
             deployment.error_message = str(e)
             db.commit()
@@ -288,38 +381,46 @@ def execute_pipeline(
 def get_pipeline_status(
     pipeline_id: str,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Get pipeline execution status"""
 
-    parts = pipeline_id.split('-')
+    parts = pipeline_id.split("-")
     if len(parts) < 2:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid pipeline ID"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pipeline ID"
         )
 
     try:
         notebook_id = int(parts[1])
     except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid pipeline ID format"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pipeline ID format"
         )
 
-    notebook = db.query(Notebook).filter(
-        Notebook.id == notebook_id,
-        Notebook.user_id == current_user.id
-    ).first()
+    notebook = (
+        db.query(Notebook)
+        .filter(Notebook.id == notebook_id, Notebook.user_id == current_user.id)
+        .first()
+    )
 
     if not notebook:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pipeline not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found"
         )
 
-    build = db.query(Build).filter(Build.notebook_id == notebook_id).order_by(Build.created_at.desc()).first()
-    deployment = db.query(Deployment).filter(Deployment.notebook_id == notebook_id).order_by(Deployment.created_at.desc()).first()
+    build = (
+        db.query(Build)
+        .filter(Build.notebook_id == notebook_id)
+        .order_by(Build.created_at.desc())
+        .first()
+    )
+    deployment = (
+        db.query(Deployment)
+        .filter(Deployment.notebook_id == notebook_id)
+        .order_by(Deployment.created_at.desc())
+        .first()
+    )
 
     steps_completed = []
     current_step = "upload"
@@ -367,7 +468,11 @@ def get_pipeline_status(
         "notebook_status": notebook.status,
         "build_status": build.status if build else None,
         "deployment_status": deployment.status if deployment else None,
-        "service_url": deployment.service_url if deployment and deployment.status == "deployed" else None
+        "service_url": (
+            deployment.service_url
+            if deployment and deployment.status == "deployed"
+            else None
+        ),
     }
 
 
@@ -376,32 +481,50 @@ def get_pipeline_history(
     skip: int = 0,
     limit: int = 20,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Get pipeline execution history"""
 
-    notebooks = db.query(Notebook).filter(
-        Notebook.user_id == current_user.id
-    ).order_by(Notebook.created_at.desc()).offset(skip).limit(limit).all()
+    notebooks = (
+        db.query(Notebook)
+        .filter(Notebook.user_id == current_user.id)
+        .order_by(Notebook.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
     history = []
     for notebook in notebooks:
-        build = db.query(Build).filter(Build.notebook_id == notebook.id).order_by(Build.created_at.desc()).first()
-        deployment = db.query(Deployment).filter(Deployment.notebook_id == notebook.id).order_by(Deployment.created_at.desc()).first()
+        build = (
+            db.query(Build)
+            .filter(Build.notebook_id == notebook.id)
+            .order_by(Build.created_at.desc())
+            .first()
+        )
+        deployment = (
+            db.query(Deployment)
+            .filter(Deployment.notebook_id == notebook.id)
+            .order_by(Deployment.created_at.desc())
+            .first()
+        )
 
-        history.append({
-            "notebook_id": notebook.id,
-            "notebook_name": notebook.name,
-            "notebook_status": notebook.status,
-            "build_id": build.id if build else None,
-            "build_status": build.status if build else None,
-            "deployment_id": deployment.id if deployment else None,
-            "deployment_status": deployment.status if deployment else None,
-            "service_url": deployment.service_url if deployment and deployment.status == "deployed" else None,
-            "created_at": notebook.created_at
-        })
+        history.append(
+            {
+                "notebook_id": notebook.id,
+                "notebook_name": notebook.name,
+                "notebook_status": notebook.status,
+                "build_id": build.id if build else None,
+                "build_status": build.status if build else None,
+                "deployment_id": deployment.id if deployment else None,
+                "deployment_status": deployment.status if deployment else None,
+                "service_url": (
+                    deployment.service_url
+                    if deployment and deployment.status == "deployed"
+                    else None
+                ),
+                "created_at": notebook.created_at,
+            }
+        )
 
-    return {
-        "total": len(history),
-        "pipelines": history
-    }
+    return {"total": len(history), "pipelines": history}

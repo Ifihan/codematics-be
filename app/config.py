@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
-    database_url: str = "sqlite:////tmp/db/notebook_to_cloud.db"
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql+psycopg2://user:password@localhost:5432/notebook_to_cloud",
+    )
 
     gcp_project_id: Optional[str] = None
     gcp_region: Optional[str] = "us-central1"
