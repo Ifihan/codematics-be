@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.db.database import get_db
 from app.db.models import User, Role, Organization, user_roles
-from app.utils.rbac import require_role, Roles, Permissions, init_default_roles
+from app.utils.rbac import require_role, Roles, Permissions, init_default_roles, DEFAULT_ROLES
 from pydantic import BaseModel, EmailStr
 
 router = APIRouter(prefix="/admin", tags=["admin"])

@@ -4,6 +4,7 @@ from fastapi.responses import RedirectResponse
 from app.config import settings
 from app.api import v1
 from app.db.database import Base, engine
+from app.middleware import RateLimitMiddleware, RequestLoggingMiddleware, ErrorHandlerMiddleware
 
 app = FastAPI(
     title=settings.app_name,
@@ -13,12 +14,14 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database on startup (non-blocking)"""
     try:
         Base.metadata.create_all(bind=engine)
     except Exception as e:
-        # Log error but don't fail startup
         print(f"Warning: Database initialization failed: {e}")
+
+app.add_middleware(ErrorHandlerMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=100)
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,24 +1,33 @@
+from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import List
 from pathlib import Path
+from fastapi.responses import FileResponse, Response
 
 from app.db.database import get_db
-from app.db.models import User, Notebook
-from app.schemas.notebook import NotebookUploadResponse, NotebookResponse, NotebookParseResponse, NotebookListResponse
 from app.utils.deps import get_current_active_user
-from app.utils.helpers import get_or_404
+from app.db.models import User, Notebook, Analysis, Deployment
+from app.schemas.notebook import (
+    NotebookUploadResponse, NotebookParseResponse, 
+    NotebookListResponse, NotebookResponse
+)
+from app.schemas.analysis import AnalysisResponse
 from app.core.notebook_service import NotebookService
+from app.core.gemini import GeminiService
+from app.core.export_service import ExportService
+from app.core.monitoring import MonitoringService
 
 router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 service = NotebookService()
-
+gemini = GeminiService()
+export_service = ExportService()
+monitoring = MonitoringService()
 
 def get_user_notebook(db: Session, notebook_id: int, user_id: int) -> Notebook:
-    """Get notebook belonging to user or raise 404"""
-    return get_or_404(db, Notebook, id=notebook_id, user_id=user_id)
-
+    notebook = db.query(Notebook).filter(Notebook.id == notebook_id, Notebook.user_id == user_id).first()
+    if not notebook:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    return notebook
 
 @router.post("/upload", response_model=NotebookUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_notebook(
@@ -26,7 +35,6 @@ async def upload_notebook(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Upload a Jupyter notebook"""
     if not file.filename.endswith('.ipynb'):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only .ipynb files allowed")
 
@@ -49,14 +57,12 @@ async def upload_notebook(
 
     return notebook
 
-
 @router.post("/{notebook_id}/parse", response_model=NotebookParseResponse)
 def parse_notebook(
     notebook_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Parse notebook and extract dependencies"""
     notebook = get_user_notebook(db, notebook_id, current_user.id)
 
     if notebook.status not in ["uploaded", "parsed"]:
@@ -79,13 +85,11 @@ def parse_notebook(
         parsed_at=notebook.parsed_at
     )
 
-
 @router.get("", response_model=List[NotebookListResponse])
 def list_notebooks(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """List all notebooks for current user"""
     notebooks = db.query(Notebook).filter_by(user_id=current_user.id).order_by(Notebook.created_at.desc()).all()
     return [
         NotebookListResponse(
@@ -100,16 +104,13 @@ def list_notebooks(
         for nb in notebooks
     ]
 
-
 @router.get("/{notebook_id}", response_model=NotebookResponse)
 def get_notebook(
     notebook_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Get notebook details"""
     return get_user_notebook(db, notebook_id, current_user.id)
-
 
 @router.get("/{notebook_id}/files/{file_type}")
 def download_file(
@@ -118,7 +119,6 @@ def download_file(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Download generated files (main.py or requirements.txt)"""
     notebook = get_user_notebook(db, notebook_id, current_user.id)
 
     file_map = {
@@ -131,10 +131,94 @@ def download_file(
 
     file_path, media_type, filename = file_map[file_type]
 
-    if not file_path or not Path(file_path).exists():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{file_type} not generated. Parse notebook first.")
+    if not file_path:
+         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{file_type} not generated. Parse notebook first.")
+
+    if file_path.startswith("gs://"):
+        try:
+            blob_name = service.storage.parse_gcs_uri(file_path)
+            content = service.storage.download_as_string(blob_name)
+            return Response(
+                content=content,
+                media_type=media_type,
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
+            )
+        except Exception as e:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"File not found in storage: {str(e)}")
+
+    if not Path(file_path).exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{file_type} not found on server.")
 
     return FileResponse(file_path, media_type=media_type, filename=filename)
+
+@router.post("/{notebook_id}/analyze", response_model=AnalysisResponse)
+def analyze_notebook(
+    notebook_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    notebook = get_user_notebook(db, notebook_id, current_user.id)
+
+    if notebook.status not in ["parsed"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Notebook must be parsed before analysis")
+
+    existing_analysis = db.query(Analysis).filter_by(notebook_id=notebook_id).first()
+    if existing_analysis:
+        return existing_analysis
+
+    if notebook.main_py_path:
+        if notebook.main_py_path.startswith("gs://"):
+            blob_name = service.storage.parse_gcs_uri(notebook.main_py_path)
+            notebook_content = service.storage.download_as_string(blob_name)
+        elif Path(notebook.main_py_path).exists():
+            notebook_content = Path(notebook.main_py_path).read_text()
+        else:
+            notebook_content = ""
+    else:
+        notebook_content = ""
+    analysis_result = gemini.analyze_notebook(notebook_content, notebook.dependencies or [])
+    health_score = gemini.calculate_health_score(analysis_result)
+
+    analysis = Analysis(
+        notebook_id=notebook_id,
+        health_score=health_score,
+        cell_classifications=analysis_result.get('cell_classifications', []),
+        issues=analysis_result.get('issues', []),
+        recommendations=analysis_result.get('recommendations'),
+        resource_estimates=analysis_result.get('resource_estimates')
+    )
+
+    db.add(analysis)
+    notebook.status = "analyzed"
+    db.commit()
+    db.refresh(analysis)
+
+    monitoring.track_analysis(health_score)
+
+    return analysis
+
+
+@router.get("/{notebook_id}/export")
+def export_notebook(
+    notebook_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    notebook = get_user_notebook(db, notebook_id, current_user.id)
+
+    if notebook.status not in ["parsed", "analyzed"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Notebook must be parsed before export")
+
+    analysis = db.query(Analysis).filter_by(notebook_id=notebook_id).first()
+    deployment = db.query(Deployment).filter_by(notebook_id=notebook_id).order_by(Deployment.created_at.desc()).first()
+
+    zip_path = export_service.create_export_package(notebook, analysis, deployment)
+
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"{notebook.name}.zip"
+    )
 
 
 @router.delete("/{notebook_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -143,7 +227,6 @@ def delete_notebook(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a notebook and its files"""
     notebook = get_user_notebook(db, notebook_id, current_user.id)
     service.delete_notebook_files(notebook)
     db.delete(notebook)

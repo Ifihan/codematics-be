@@ -26,9 +26,17 @@ class Settings(BaseSettings):
     )
 
     gcp_project_id: Optional[str] = None
+    gcp_region: str = "us-central1"
     gcp_service_account_key: Optional[str] = None
     gcp_service_account_key_base64: Optional[str] = None
     gcp_bucket_name: Optional[str] = None
+    gcp_artifact_registry: Optional[str] = None
+    use_secret_manager: bool = False
+    enable_cloud_logging: bool = True
+
+    gemini_model: str = "gemini-2.0-flash-exp"
+    gemini_temperature: float = 0.2
+    gemini_max_tokens: int = 8192
 
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
 

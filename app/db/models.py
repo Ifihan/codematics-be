@@ -78,3 +78,48 @@ class Notebook(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     parsed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class Analysis(Base):
+    __tablename__ = "analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notebook_id = Column(Integer, ForeignKey("notebooks.id"), unique=True, nullable=False)
+    health_score = Column(Integer, nullable=False)
+    cell_classifications = Column(JSON, nullable=False)
+    issues = Column(JSON, nullable=False)
+    recommendations = Column(JSON, nullable=True)
+    resource_estimates = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Deployment(Base):
+    __tablename__ = "deployments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notebook_id = Column(Integer, ForeignKey("notebooks.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=False)
+    status = Column(String, default="pending")
+    build_id = Column(String, nullable=True)
+    image_url = Column(String, nullable=True)
+    service_url = Column(String, nullable=True)
+    region = Column(String, nullable=False)
+    dockerfile_path = Column(String, nullable=True)
+    source_gcs_uri = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    build_logs_url = Column(String, nullable=True)
+    build_duration = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    deployed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class DeploymentMetric(Base):
+    __tablename__ = "deployment_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    deployment_id = Column(Integer, ForeignKey("deployments.id"), nullable=False)
+    metric_type = Column(String, nullable=False)
+    value = Column(JSON, nullable=False)
+    recorded_at = Column(DateTime(timezone=True), server_default=func.now())
