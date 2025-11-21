@@ -78,37 +78,3 @@ class Notebook(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     parsed_at = Column(DateTime(timezone=True), nullable=True)
-
-
-class Build(Base):
-    __tablename__ = "builds"
-
-    id = Column(Integer, primary_key=True, index=True)
-    notebook_id = Column(Integer, ForeignKey("notebooks.id"), nullable=False)
-    build_id = Column(String, unique=True, index=True, nullable=False)
-    status = Column(String, default="queued")
-    image_name = Column(String, nullable=False)
-    source_bucket = Column(String, nullable=True)
-    source_object = Column(String, nullable=True)
-    log_url = Column(String, nullable=True)
-    error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    finished_at = Column(DateTime(timezone=True), nullable=True)
-
-
-class Deployment(Base):
-    __tablename__ = "deployments"
-
-    id = Column(Integer, primary_key=True, index=True)
-    notebook_id = Column(Integer, ForeignKey("notebooks.id"), nullable=False)
-    build_id = Column(Integer, ForeignKey("builds.id"), nullable=True)
-    service_name = Column(String, nullable=False)
-    service_url = Column(String, nullable=True)
-    revision_name = Column(String, nullable=True)
-    status = Column(String, default="deploying")
-    image_uri = Column(String, nullable=False)
-    traffic_percent = Column(Integer, default=100)
-    error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    deployed_at = Column(DateTime(timezone=True), nullable=True)

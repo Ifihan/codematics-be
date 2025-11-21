@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from app.config import settings
-from app.api.v1 import auth, notebooks, builds, deployments, webhooks, metrics, admin, pipeline
+from app.api import v1
 from app.db.database import Base, engine
 
 app = FastAPI(
@@ -27,24 +28,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(notebooks.router, prefix="/api/v1")
-app.include_router(builds.router, prefix="/api/v1")
-app.include_router(deployments.router, prefix="/api/v1")
-app.include_router(webhooks.router, prefix="/api/v1")
-app.include_router(metrics.router, prefix="/api/v1")
-app.include_router(admin.router, prefix="/api/v1")
-app.include_router(pipeline.router, prefix="/api/v1")
+app.include_router(v1.router)
 
 
 @app.get("/")
 def root():
-    """Root endpoint"""
-    return {
-        "name": settings.app_name,
-        "version": settings.app_version,
-        "status": "running"
-    }
+    """Redirect to API documentation"""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health")
