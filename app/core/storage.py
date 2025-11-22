@@ -3,15 +3,17 @@ from google.auth import default
 from google.oauth2 import service_account
 from pathlib import Path
 from typing import Optional
+import json
+import base64
 from app.config import settings
 
 
 class StorageService:
     def __init__(self):
         if settings.gcp_service_account_key:
-            credentials = service_account.Credentials.from_service_account_file(
-                settings.gcp_service_account_key
-            )
+            decoded = base64.b64decode(settings.gcp_service_account_key).decode('utf-8')
+            service_account_info = json.loads(decoded)
+            credentials = service_account.Credentials.from_service_account_info(service_account_info)
             self.client = storage.Client(
                 project=settings.gcp_project_id,
                 credentials=credentials
