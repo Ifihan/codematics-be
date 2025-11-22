@@ -7,9 +7,13 @@ class CodeGenerator:
         notebook_name: str,
         dependencies: List[str],
         cell_classifications: List[Dict[str, Any]],
-        use_gcs_model: bool = True
+        use_gcs_model: bool = True,
+        model_info: Dict[str, Any] = None
     ) -> str:
-        has_ml_model = any("training" in c.get("type", "") for c in cell_classifications)
+        has_ml_model = (model_info and model_info.get("has_model")) or any("training" in c.get("type", "") for c in cell_classifications)
+
+        if model_info is None:
+            model_info = {}
 
         imports = """from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import RedirectResponse
@@ -71,21 +75,77 @@ def health():
 """
 
         if has_ml_model:
-            app_code += """
+            output_type = model_info.get("output_type", "classification")
+            n_features = model_info.get("n_features", 0)
+            feature_names = model_info.get("feature_names", [])
+            class_names = model_info.get("class_names", [])
+            prediction_method = model_info.get("prediction_method", "predict")
+
+            if feature_names and len(feature_names) == n_features:
+                request_fields = "\n    ".join([f"{name}: float" for name in feature_names])
+                features_array = f"[{', '.join([f'request.{name}' for name in feature_names])}]"
+            elif n_features > 0:
+                request_fields = f"features: list[float]  # Expects {n_features} features"
+                features_array = "request.features"
+            else:
+                request_fields = "features: list"
+                features_array = "request.features"
+
+            if output_type == "classification" and class_names:
+                response_fields = """prediction: Any
+    confidence: float = None
+    probabilities: dict = None"""
+                prediction_logic = f"""
+    import numpy as np
+    X = np.array([{features_array}])
+
+    prediction = _model.{prediction_method}(X)[0]
+
+    has_proba = hasattr(_model, 'predict_proba')
+    probabilities = _model.predict_proba(X)[0] if has_proba else None
+
+    class_names = {class_names}
+    pred_label = class_names[int(prediction)] if isinstance(prediction, (int, np.integer)) and len(class_names) > 0 else str(prediction)
+
+    return {{
+        "prediction": pred_label,
+        "confidence": float(max(probabilities)) if probabilities is not None else None,
+        "probabilities": dict(zip(class_names, probabilities.tolist())) if probabilities is not None and len(class_names) > 0 else None
+    }}"""
+            elif output_type == "regression":
+                response_fields = """value: float
+    prediction: Any"""
+                prediction_logic = f"""
+    import numpy as np
+    X = np.array([{features_array}])
+    result = _model.{prediction_method}(X)[0]
+
+    return {{
+        "value": float(result),
+        "prediction": float(result)
+    }}"""
+            else:
+                response_fields = "prediction: Any"
+                prediction_logic = f"""
+    import numpy as np
+    X = np.array([{features_array}])
+    result = _model.{prediction_method}(X)
+
+    return {{"prediction": result.tolist() if hasattr(result, 'tolist') else result}}"""
+
+            app_code += f"""
 class PredictionRequest(BaseModel):
-    features: list
+    {request_fields}
 
 class PredictionResponse(BaseModel):
-    prediction: Any
+    {response_fields}
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(request: PredictionRequest):
     global _model
     if _model is None:
         raise HTTPException(503, "Model not loaded")
-    try:
-        result = _model.predict([request.features])
-        return {"prediction": result.tolist() if hasattr(result, 'tolist') else result}
+    try:{prediction_logic}
     except Exception as e:
         raise HTTPException(500, str(e))
 """

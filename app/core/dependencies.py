@@ -47,8 +47,8 @@ class DependencyExtractor:
             req_path.write_text(req_content)
 
         return {
-            "dependencies": dependencies,
-            "dependencies_count": len(dependencies),
+            "dependencies": mapped_dependencies,
+            "dependencies_count": len(mapped_dependencies),
             "requirements_txt_content": req_content,
             "requirements_txt_path": str(req_path) if req_path else None,
             "has_fastapi_app": self._has_fastapi_app(tree),

@@ -36,12 +36,10 @@ class ExportService:
             elif notebook.main_py_path and Path(notebook.main_py_path).exists():
                 shutil.copy(notebook.main_py_path, export_dir / "main.py")
 
-            # Handle requirements.txt (GCS or local)
-            if notebook.requirements_txt_path and notebook.requirements_txt_path.startswith("gs://"):
-                blob_name = self.storage.parse_gcs_uri(notebook.requirements_txt_path)
-                self.storage.download_file(blob_name, str(export_dir / "requirements.txt"))
-            elif notebook.requirements_txt_path and Path(notebook.requirements_txt_path).exists():
-                shutil.copy(notebook.requirements_txt_path, export_dir / "requirements.txt")
+            # Generate requirements.txt from dependencies list (ensures package mappings are applied)
+            if notebook.dependencies:
+                req_content = "\n".join(notebook.dependencies) + "\n"
+                (export_dir / "requirements.txt").write_text(req_content)
 
             app_type = self.dockerfile_gen.detect_app_type(notebook.dependencies or [])
 
@@ -55,11 +53,13 @@ class ExportService:
 
             if app_type == "fastapi":
                 cell_classifications = analysis.cell_classifications if analysis else []
+                model_info = analysis.model_info if analysis and hasattr(analysis, 'model_info') else (analysis.get('model_info') if isinstance(analysis, dict) else {})
                 app_wrapper = self.code_gen.generate_fastapi_wrapper(
                     notebook.name,
                     notebook.dependencies or [],
                     cell_classifications,
-                    use_gcs_model=has_model
+                    use_gcs_model=has_model,
+                    model_info=model_info
                 )
                 (export_dir / "app.py").write_text(app_wrapper)
             elif app_type == "streamlit":
@@ -145,10 +145,9 @@ class ExportService:
                 self.storage.download_file(blob_name, str(export_dir / "main.py"))
                 files_to_upload.append(("main.py", (export_dir / "main.py").read_text()))
 
-            if notebook.requirements_txt_path and notebook.requirements_txt_path.startswith("gs://"):
-                blob_name = self.storage.parse_gcs_uri(notebook.requirements_txt_path)
-                self.storage.download_file(blob_name, str(export_dir / "requirements.txt"))
-                files_to_upload.append(("requirements.txt", (export_dir / "requirements.txt").read_text()))
+            if notebook.dependencies:
+                req_content = "\n".join(notebook.dependencies) + "\n"
+                files_to_upload.append(("requirements.txt", req_content))
 
             app_type = self.dockerfile_gen.detect_app_type(notebook.dependencies or [])
 
@@ -162,11 +161,13 @@ class ExportService:
 
             if app_type == "fastapi":
                 cell_classifications = analysis.cell_classifications if analysis else []
+                model_info = analysis.model_info if analysis and hasattr(analysis, 'model_info') else (analysis.get('model_info') if isinstance(analysis, dict) else {})
                 app_wrapper = self.code_gen.generate_fastapi_wrapper(
                     notebook.name,
                     notebook.dependencies or [],
                     cell_classifications,
-                    use_gcs_model=has_model
+                    use_gcs_model=has_model,
+                    model_info=model_info
                 )
                 files_to_upload.append(("app.py", app_wrapper))
 

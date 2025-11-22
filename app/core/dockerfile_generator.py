@@ -51,7 +51,7 @@ COPY . .
 ENV PATH=/root/.local/bin:$PATH
 EXPOSE 8080
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
 """
 
     def _flask_template(self, dependencies: List[str], analysis: Dict[str, Any]) -> str:

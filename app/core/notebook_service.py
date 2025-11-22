@@ -9,6 +9,7 @@ from app.core.parser import NotebookParser
 from app.core.dependencies import DependencyExtractor
 from app.db.models import Notebook
 from app.core.storage import StorageService
+from app.core.gemini import GeminiService
 
 
 class NotebookService:
@@ -16,6 +17,7 @@ class NotebookService:
 
     def __init__(self):
         self.storage = StorageService()
+        self.gemini = GeminiService()
 
     def save_uploaded_file(self, content: bytes, filename: str, user_id: int, notebook_id: int) -> str:
         """Save uploaded notebook file to GCS"""
@@ -44,6 +46,30 @@ class NotebookService:
 
             # Extract dependencies
             deps_result = DependencyExtractor(file_path=parse_result['main_py_path']).analyze(str(tmp_path))
+
+            # Analyze with Gemini and Generate FastAPI App if model detected
+            try:
+                notebook_content = parse_result['main_py_content']
+                dependencies = deps_result['dependencies']
+                
+                analysis = self.gemini.analyze_notebook(notebook_content, dependencies)
+                
+                if analysis['model_info']['has_model']:
+                    generated_code = self.gemini.generate_fastapi_app(notebook_content, analysis['model_info'])
+                    
+                    # Overwrite main.py with generated FastAPI app
+                    main_py_path = Path(parse_result['main_py_path'])
+                    main_py_path.write_text(generated_code)
+                    
+                    # Re-analyze dependencies for the new app
+                    deps_result = DependencyExtractor(file_path=str(main_py_path)).analyze(str(tmp_path))
+                    
+                    # Update parse result content
+                    parse_result['main_py_content'] = generated_code
+            except Exception as e:
+                print(f"Gemini generation failed: {e}")
+                # Fallback to original parsing if generation fails
+                pass
 
             # Auto-inject uvicorn startup for FastAPI apps
             if deps_result['has_fastapi_app'] and not deps_result['has_uvicorn_run']:

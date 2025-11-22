@@ -63,11 +63,9 @@ def process_deployment(deployment_id: int, db_url: str):
             else:
                 shutil.copy(notebook.main_py_path, Path(tmpdir) / "main.py")
 
-            if notebook.requirements_txt_path.startswith("gs://"):
-                req_blob = notebook.requirements_txt_path.replace(f"gs://{settings.gcp_bucket_name}/", "")
-                storage.download_file(req_blob, str(Path(tmpdir) / "requirements.txt"))
-            else:
-                shutil.copy(notebook.requirements_txt_path, Path(tmpdir) / "requirements.txt")
+            if notebook.dependencies:
+                req_content = "\n".join(notebook.dependencies) + "\n"
+                Path(tmpdir, "requirements.txt").write_text(req_content)
 
             app_type = dockerfile_gen.detect_app_type(notebook.dependencies or [])
             analysis_dict = {
