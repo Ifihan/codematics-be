@@ -31,17 +31,18 @@ def get_user_notebook(db: Session, notebook_id: int, user_id: int) -> Notebook:
 
 @router.post("/upload", response_model=NotebookUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_notebook(
-    file: UploadFile = File(...),
+    notebook_file: UploadFile = File(...),
+    model_file: UploadFile = File(None),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    if not file.filename.endswith('.ipynb'):
+    if not notebook_file.filename.endswith('.ipynb'):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only .ipynb files allowed")
 
-    content = await file.read()
+    content = await notebook_file.read()
     notebook = Notebook(
-        name=file.filename.replace('.ipynb', ''),
-        filename=file.filename,
+        name=notebook_file.filename.replace('.ipynb', ''),
+        filename=notebook_file.filename,
         file_path="",
         user_id=current_user.id,
         status="uploading"
@@ -50,10 +51,14 @@ async def upload_notebook(
     db.commit()
     db.refresh(notebook)
 
-    notebook.file_path = service.save_uploaded_file(content, file.filename, current_user.id, notebook.id)
+    notebook.file_path = service.save_uploaded_file(content, notebook_file.filename, current_user.id, notebook.id)
     notebook.status = "uploaded"
     db.commit()
     db.refresh(notebook)
+
+    if model_file:
+        from app.api.v1.model_versions import upload_model_version_internal
+        await upload_model_version_internal(notebook.id, model_file, None, current_user, db)
 
     return notebook
 
@@ -212,7 +217,7 @@ def export_notebook(
     analysis = db.query(Analysis).filter_by(notebook_id=notebook_id).first()
     deployment = db.query(Deployment).filter_by(notebook_id=notebook_id).order_by(Deployment.created_at.desc()).first()
 
-    zip_path = export_service.create_export_package(notebook, analysis, deployment)
+    zip_path = export_service.create_export_package(notebook, analysis, deployment, db)
 
     return FileResponse(
         zip_path,

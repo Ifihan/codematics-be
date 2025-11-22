@@ -9,6 +9,13 @@ class DependencyExtractor:
 
     STDLIB_MODULES = set(sys.stdlib_module_names)
 
+    PACKAGE_MAPPINGS = {
+        'sklearn': 'scikit-learn',
+        'cv2': 'opencv-python',
+        'PIL': 'Pillow',
+        'yaml': 'PyYAML',
+    }
+
     def __init__(self, code: Optional[str] = None, file_path: Optional[str] = None):
         self.code = code or (Path(file_path).read_text() if file_path else None)
         if not self.code:
@@ -26,11 +33,12 @@ class DependencyExtractor:
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imports.add(node.module.split('.')[0])
 
-        # Filter stdlib and sort
+        # Filter stdlib and map to correct package names
         dependencies = sorted(imp for imp in imports if imp not in self.STDLIB_MODULES)
+        mapped_dependencies = [self.PACKAGE_MAPPINGS.get(dep, dep) for dep in dependencies]
 
         # Generate requirements.txt
-        req_content = "\n".join(dependencies) + "\n" if dependencies else ""
+        req_content = "\n".join(mapped_dependencies) + "\n" if mapped_dependencies else ""
         req_path = None
         if output_dir:
             output_path = Path(output_dir)

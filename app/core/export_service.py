@@ -2,14 +2,14 @@ from pathlib import Path
 import zipfile
 import tempfile
 import shutil
-from typing import Optional
-from app.db.models import Notebook, Analysis, Deployment
+from typing import Optional, Dict, Any
+from sqlalchemy.orm import Session
+from app.db.models import Notebook, Analysis, Deployment, ModelVersion, User
 from app.core.code_generator import CodeGenerator
 from app.core.dockerfile_generator import DockerfileGenerator
 from app.config import settings
-
-
 from app.core.storage import StorageService
+from app.core.github_service import GitHubService
 
 class ExportService:
     def __init__(self):
@@ -21,7 +21,8 @@ class ExportService:
         self,
         notebook: Notebook,
         analysis: Optional[Analysis] = None,
-        deployment: Optional[Deployment] = None
+        deployment: Optional[Deployment] = None,
+        db: Optional[Session] = None
     ) -> str:
         with tempfile.TemporaryDirectory() as tmpdir:
             export_dir = Path(tmpdir) / notebook.name
@@ -44,12 +45,21 @@ class ExportService:
 
             app_type = self.dockerfile_gen.detect_app_type(notebook.dependencies or [])
 
+            has_model = False
+            if db:
+                active_model = db.query(ModelVersion).filter(
+                    ModelVersion.notebook_id == notebook.id,
+                    ModelVersion.is_active == True
+                ).first()
+                has_model = active_model is not None
+
             if app_type == "fastapi":
                 cell_classifications = analysis.cell_classifications if analysis else []
                 app_wrapper = self.code_gen.generate_fastapi_wrapper(
                     notebook.name,
                     notebook.dependencies or [],
-                    cell_classifications
+                    cell_classifications,
+                    use_gcs_model=has_model
                 )
                 (export_dir / "app.py").write_text(app_wrapper)
             elif app_type == "streamlit":
@@ -103,3 +113,117 @@ class ExportService:
                         zipf.write(file_path, arcname)
 
             return str(zip_path)
+
+    def push_to_github(
+        self,
+        notebook: Notebook,
+        user: User,
+        analysis: Optional[Analysis] = None,
+        db: Optional[Session] = None
+    ) -> Dict[str, Any]:
+        if not user.github_token or not user.github_username:
+            raise ValueError("GitHub not connected. User must authenticate with GitHub first.")
+
+        github = GitHubService(user.github_token)
+        repo_name = f"{notebook.name.lower().replace(' ', '-')}-deployment"
+
+        repo = github.create_repo(
+            name=repo_name,
+            description=f"Deployment for {notebook.name} notebook",
+            private=False
+        )
+
+        owner = user.github_username
+        files_to_upload = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir) / notebook.name
+            export_dir.mkdir(parents=True)
+
+            if notebook.main_py_path and notebook.main_py_path.startswith("gs://"):
+                blob_name = self.storage.parse_gcs_uri(notebook.main_py_path)
+                self.storage.download_file(blob_name, str(export_dir / "main.py"))
+                files_to_upload.append(("main.py", (export_dir / "main.py").read_text()))
+
+            if notebook.requirements_txt_path and notebook.requirements_txt_path.startswith("gs://"):
+                blob_name = self.storage.parse_gcs_uri(notebook.requirements_txt_path)
+                self.storage.download_file(blob_name, str(export_dir / "requirements.txt"))
+                files_to_upload.append(("requirements.txt", (export_dir / "requirements.txt").read_text()))
+
+            app_type = self.dockerfile_gen.detect_app_type(notebook.dependencies or [])
+
+            has_model = False
+            if db:
+                active_model = db.query(ModelVersion).filter(
+                    ModelVersion.notebook_id == notebook.id,
+                    ModelVersion.is_active == True
+                ).first()
+                has_model = active_model is not None
+
+            if app_type == "fastapi":
+                cell_classifications = analysis.cell_classifications if analysis else []
+                app_wrapper = self.code_gen.generate_fastapi_wrapper(
+                    notebook.name,
+                    notebook.dependencies or [],
+                    cell_classifications,
+                    use_gcs_model=has_model
+                )
+                files_to_upload.append(("app.py", app_wrapper))
+
+            analysis_dict = {
+                "issues": analysis.issues if analysis else [],
+                "health_score": analysis.health_score if analysis else 100
+            }
+            dockerfile_content = self.dockerfile_gen.generate(
+                analysis_dict,
+                notebook.dependencies or [],
+                app_type
+            )
+            files_to_upload.append(("Dockerfile", dockerfile_content))
+
+            gitignore = self.code_gen.generate_gitignore()
+            files_to_upload.append((".gitignore", gitignore))
+
+            workflow_content = f"""name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - id: auth
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{{{ secrets.GCP_SA_KEY }}}}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Build and Deploy
+        run: |
+          gcloud builds submit --tag {settings.gcp_artifact_registry}/{repo_name}
+          gcloud run deploy {repo_name} \\
+            --image {settings.gcp_artifact_registry}/{repo_name} \\
+            --region {settings.gcp_region} \\
+            --platform managed \\
+            --allow-unauthenticated
+"""
+            files_to_upload.append((".github/workflows/deploy.yml", workflow_content))
+
+        for file_path, content in files_to_upload:
+            github.upload_file(owner, repo_name, file_path, content, f"Add {file_path}")
+
+        webhook_url = f"{settings.github_redirect_uri.rsplit('/', 2)[0]}/webhooks/github"
+        if settings.github_webhook_secret:
+            github.create_webhook(owner, repo_name, webhook_url, settings.github_webhook_secret)
+
+        return {
+            "repo_url": repo["html_url"],
+            "repo_name": repo_name,
+            "owner": owner
+        }

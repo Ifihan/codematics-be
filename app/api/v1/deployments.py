@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.db.database import get_db, SessionLocal
@@ -13,6 +13,7 @@ from app.core.export_service import ExportService
 from app.core.logging_service import LoggingService
 from app.core.monitoring import MonitoringService
 from app.config import settings
+from app.db.models import ModelVersion
 from pathlib import Path
 from datetime import datetime
 import tempfile
@@ -20,6 +21,10 @@ import shutil
 import os
 import time
 import tarfile
+import secrets
+import requests
+import asyncio
+import json
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -141,8 +146,27 @@ def process_deployment(deployment_id: int, db_url: str):
         deployment.build_duration = build_duration
         logger.log_build_complete(build_id, "SUCCESS", build_duration)
 
+        env_vars = {}
+        active_model = db.query(ModelVersion).filter(
+            ModelVersion.notebook_id == notebook.id,
+            ModelVersion.is_active == True
+        ).first()
+
+        if active_model:
+            admin_api_key = secrets.token_urlsafe(32)
+            deployment.admin_api_key = admin_api_key
+            env_vars = {
+                "GCS_BUCKET": settings.gcp_bucket_name,
+                "MODEL_GCS_PATH": active_model.gcs_path.replace(f"gs://{settings.gcp_bucket_name}/", ""),
+                "ADMIN_API_KEY": admin_api_key,
+                "GCP_PROJECT_ID": settings.gcp_project_id
+            }
+
         service = cloud_run.deploy_service(
-            service_name=deployment.name, image_uri=image_name, port=8080
+            service_name=deployment.name,
+            image_uri=image_name,
+            port=8080,
+            env_vars=env_vars if env_vars else None
         )
 
         deployment.service_url = cloud_run.get_service_url(deployment.name)
@@ -305,3 +329,102 @@ def download_deployment(
         media_type="application/zip",
         filename=f"{notebook.name}-deployment.zip",
     )
+
+
+@router.post("/{deployment_id}/reload-model")
+def reload_model(
+    deployment_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    deployment = db.query(Deployment).filter(
+        Deployment.id == deployment_id,
+        Deployment.user_id == current_user.id
+    ).first()
+    if not deployment:
+        raise HTTPException(404, "Deployment not found")
+
+    if not deployment.service_url or deployment.status != "deployed":
+        raise HTTPException(400, "Deployment not active")
+
+    notebook = db.query(Notebook).filter_by(id=deployment.notebook_id).first()
+    active_model = db.query(ModelVersion).filter(
+        ModelVersion.notebook_id == notebook.id,
+        ModelVersion.is_active == True
+    ).first()
+
+    if not active_model:
+        raise HTTPException(404, "No active model version found")
+
+    if not deployment.admin_api_key:
+        raise HTTPException(500, "Admin API key not configured")
+
+    reload_url = f"{deployment.service_url}/admin/reload-model"
+    headers = {"X-API-Key": deployment.admin_api_key}
+
+    for attempt in range(3):
+        try:
+            response = requests.post(reload_url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                return {
+                    "status": "success",
+                    "message": "Model reloaded",
+                    "version": active_model.version,
+                    "timestamp": response.json().get("timestamp")
+                }
+            elif response.status_code == 401:
+                raise HTTPException(401, "Invalid admin API key")
+        except requests.RequestException as e:
+            if attempt == 2:
+                raise HTTPException(503, f"Failed to reload model: {str(e)}")
+            time.sleep(2)
+
+    raise HTTPException(503, "Model reload failed after 3 attempts")
+
+
+@router.websocket("/{deployment_id}/logs/stream")
+async def stream_logs(
+    websocket: WebSocket,
+    deployment_id: int,
+    db: Session = Depends(get_db)
+):
+    await websocket.accept()
+
+    try:
+        deployment = db.query(Deployment).filter_by(id=deployment_id).first()
+        if not deployment or not deployment.build_id:
+            await websocket.send_json({"error": "Deployment or build not found"})
+            await websocket.close()
+            return
+
+        last_position = 0
+        while deployment.status in ["pending", "building", "deploying"]:
+            try:
+                build_status = cloud_build.get_build_status(deployment.build_id)
+                logs_url = deployment.build_logs_url
+
+                if logs_url:
+                    await websocket.send_json({
+                        "type": "status",
+                        "status": deployment.status,
+                        "build_status": build_status
+                    })
+
+                if build_status in ["SUCCESS", "FAILURE", "CANCELLED"]:
+                    await websocket.send_json({
+                        "type": "complete",
+                        "status": build_status
+                    })
+                    break
+
+                await asyncio.sleep(2)
+                db.refresh(deployment)
+
+            except WebSocketDisconnect:
+                break
+
+        await websocket.close()
+
+    except Exception as e:
+        await websocket.send_json({"error": str(e)})
+        await websocket.close()

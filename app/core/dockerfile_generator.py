@@ -16,15 +16,19 @@ class DockerfileGenerator:
 
     def _streamlit_template(self, dependencies: List[str], analysis: Dict[str, Any]) -> str:
         python_version = self._detect_python_version(analysis)
-        return f"""FROM python:{python_version}-slim
+        return f"""FROM python:{python_version}-slim AS builder
 
 WORKDIR /app
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir -r requirements.txt
 
+FROM python:{python_version}-slim
+
+WORKDIR /app
+COPY --from=builder /root/.local /root/.local
 COPY . .
 
+ENV PATH=/root/.local/bin:$PATH
 EXPOSE 8080
 
 CMD ["streamlit", "run", "main.py", "--server.port=8080", "--server.address=0.0.0.0"]
@@ -32,31 +36,39 @@ CMD ["streamlit", "run", "main.py", "--server.port=8080", "--server.address=0.0.
 
     def _fastapi_template(self, dependencies: List[str], analysis: Dict[str, Any]) -> str:
         python_version = self._detect_python_version(analysis)
-        return f"""FROM python:{python_version}-slim
+        return f"""FROM python:{python_version}-slim AS builder
 
 WORKDIR /app
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir -r requirements.txt
 
+FROM python:{python_version}-slim
+
+WORKDIR /app
+COPY --from=builder /root/.local /root/.local
 COPY . .
 
+ENV PATH=/root/.local/bin:$PATH
 EXPOSE 8080
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
 """
 
     def _flask_template(self, dependencies: List[str], analysis: Dict[str, Any]) -> str:
         python_version = self._detect_python_version(analysis)
-        return f"""FROM python:{python_version}-slim
+        return f"""FROM python:{python_version}-slim AS builder
 
 WORKDIR /app
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir -r requirements.txt
 
+FROM python:{python_version}-slim
+
+WORKDIR /app
+COPY --from=builder /root/.local /root/.local
 COPY . .
 
+ENV PATH=/root/.local/bin:$PATH
 EXPOSE 8080
 
 CMD ["gunicorn", "-b", "0.0.0.0:8080", "main:app"]
@@ -64,15 +76,19 @@ CMD ["gunicorn", "-b", "0.0.0.0:8080", "main:app"]
 
     def _default_template(self, dependencies: List[str], analysis: Dict[str, Any]) -> str:
         python_version = self._detect_python_version(analysis)
-        return f"""FROM python:{python_version}-slim
+        return f"""FROM python:{python_version}-slim AS builder
 
 WORKDIR /app
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir -r requirements.txt
 
+FROM python:{python_version}-slim
+
+WORKDIR /app
+COPY --from=builder /root/.local /root/.local
 COPY . .
 
+ENV PATH=/root/.local/bin:$PATH
 EXPOSE 8080
 
 CMD ["python", "main.py"]

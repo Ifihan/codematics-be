@@ -40,6 +40,13 @@ class Settings(BaseSettings):
 
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
 
+    github_app_id: Optional[str] = None
+    github_client_id: Optional[str] = None
+    github_client_secret: Optional[str] = None
+    github_redirect_uri: Optional[str] = None
+    github_webhook_secret: Optional[str] = None
+    github_private_key_path: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )

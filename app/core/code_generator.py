@@ -6,29 +6,68 @@ class CodeGenerator:
         self,
         notebook_name: str,
         dependencies: List[str],
-        cell_classifications: List[Dict[str, Any]]
+        cell_classifications: List[Dict[str, Any]],
+        use_gcs_model: bool = True
     ) -> str:
         has_ml_model = any("training" in c.get("type", "") for c in cell_classifications)
 
-        imports = """from fastapi import FastAPI, HTTPException
+        imports = """from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from typing import Any
+from datetime import datetime
 import main
 """
 
-        if has_ml_model:
-            imports += "import pickle\nfrom pathlib import Path\n"
+        if has_ml_model and use_gcs_model:
+            imports += """import os
+import pickle
+from google.cloud import storage
+"""
 
         app_code = f"""
 app = FastAPI(title="{notebook_name} API")
+"""
 
+        if has_ml_model and use_gcs_model:
+            app_code += """
+_model = None
+
+def load_model():
+    client = storage.Client()
+    bucket_name = os.getenv("GCS_BUCKET")
+    model_path = os.getenv("MODEL_GCS_PATH")
+
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(model_path)
+
+    model_bytes = blob.download_as_bytes()
+    return pickle.loads(model_bytes)
+
+@app.on_event("startup")
+def startup():
+    global _model
+    _model = load_model()
+
+@app.post("/admin/reload-model")
+def reload_model(x_api_key: str = Header(...)):
+    expected_key = os.getenv("ADMIN_API_KEY")
+    if not expected_key or x_api_key != expected_key:
+        raise HTTPException(401, "Invalid API key")
+
+    global _model
+    _model = load_model()
+    return {"status": "reloaded", "timestamp": datetime.utcnow().isoformat()}
+"""
+
+        app_code += """
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
 
 @app.get("/health")
 def health():
-    return {{"status": "healthy"}}
+    return {"status": "healthy"}
 """
 
         if has_ml_model:
@@ -41,11 +80,14 @@ class PredictionResponse(BaseModel):
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(request: PredictionRequest):
+    global _model
+    if _model is None:
+        raise HTTPException(503, "Model not loaded")
     try:
-        result = main.predict(request.features)
-        return {"prediction": result}
+        result = _model.predict([request.features])
+        return {"prediction": result.tolist() if hasattr(result, 'tolist') else result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, str(e))
 """
 
         return imports + app_code

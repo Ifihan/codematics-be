@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, Table
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, Table, BigInteger, Numeric
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.database import Base
@@ -34,6 +34,11 @@ class User(Base):
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    github_token = Column(String, nullable=True)
+    github_refresh_token = Column(String(512), nullable=True)
+    github_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    github_username = Column(String, nullable=True)
 
     roles = relationship("Role", secondary=user_roles, backref="users")
 
@@ -110,6 +115,8 @@ class Deployment(Base):
     error_message = Column(Text, nullable=True)
     build_logs_url = Column(String, nullable=True)
     build_duration = Column(Integer, nullable=True)
+    admin_api_key = Column(String, nullable=True)
+    github_repo_url = Column(String(512), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     deployed_at = Column(DateTime(timezone=True), nullable=True)
@@ -123,3 +130,16 @@ class DeploymentMetric(Base):
     metric_type = Column(String, nullable=False)
     value = Column(JSON, nullable=False)
     recorded_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModelVersion(Base):
+    __tablename__ = "model_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notebook_id = Column(Integer, ForeignKey("notebooks.id", ondelete="CASCADE"), nullable=False)
+    version = Column(Integer, nullable=False)
+    gcs_path = Column(String(512), nullable=False)
+    size_bytes = Column(BigInteger, nullable=True)
+    accuracy = Column(Numeric(5, 2), nullable=True)
+    is_active = Column(Boolean, default=False)
+    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
