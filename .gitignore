@@ -43,3 +43,4 @@ gcp-key-base64.txt
 uploads/
 exempts/
 notebook-to-cloud-deploy.pem
+.github/workflows

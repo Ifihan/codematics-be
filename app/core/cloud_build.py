@@ -2,14 +2,16 @@ from google.cloud.devtools import cloudbuild_v1
 from google.oauth2 import service_account
 from google.auth import default
 from app.config import settings
+import json
+import base64
 
 
 class CloudBuildService:
     def __init__(self):
         if settings.gcp_service_account_key:
-            credentials = service_account.Credentials.from_service_account_file(
-                settings.gcp_service_account_key
-            )
+            decoded = base64.b64decode(settings.gcp_service_account_key).decode('utf-8')
+            service_account_info = json.loads(decoded)
+            credentials = service_account.Credentials.from_service_account_info(service_account_info)
             self.client = cloudbuild_v1.CloudBuildClient(credentials=credentials)
         else:
             credentials, _ = default()

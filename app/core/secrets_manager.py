@@ -3,14 +3,16 @@ from google.oauth2 import service_account
 from google.auth import default
 from app.config import settings
 from typing import Optional
+import json
+import base64
 
 
 class SecretsManager:
     def __init__(self):
         if settings.gcp_service_account_key:
-            credentials = service_account.Credentials.from_service_account_file(
-                settings.gcp_service_account_key
-            )
+            decoded = base64.b64decode(settings.gcp_service_account_key).decode('utf-8')
+            service_account_info = json.loads(decoded)
+            credentials = service_account.Credentials.from_service_account_info(service_account_info)
             self.client = secretmanager.SecretManagerServiceClient(credentials=credentials)
         else:
             credentials, _ = default()

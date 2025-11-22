@@ -1,4 +1,6 @@
 import time
+import json
+import base64
 from google.cloud import monitoring_v3
 from google.oauth2 import service_account
 from google.auth import default
@@ -12,9 +14,9 @@ class MonitoringService:
         self.project_name = f"projects/{self.project_id}"
 
         if settings.gcp_service_account_key:
-            credentials = service_account.Credentials.from_service_account_file(
-                settings.gcp_service_account_key
-            )
+            decoded = base64.b64decode(settings.gcp_service_account_key).decode('utf-8')
+            service_account_info = json.loads(decoded)
+            credentials = service_account.Credentials.from_service_account_info(service_account_info)
             self.client = monitoring_v3.MetricServiceClient(credentials=credentials)
         else:
             credentials, _ = default()
