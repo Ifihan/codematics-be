@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, Table
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, Table, BigInteger, Numeric
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.database import Base
@@ -34,6 +34,11 @@ class User(Base):
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    github_token = Column(String, nullable=True)
+    github_refresh_token = Column(String(512), nullable=True)
+    github_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    github_username = Column(String, nullable=True)
 
     roles = relationship("Role", secondary=user_roles, backref="users")
 
@@ -80,21 +85,17 @@ class Notebook(Base):
     parsed_at = Column(DateTime(timezone=True), nullable=True)
 
 
-class Build(Base):
-    __tablename__ = "builds"
+class Analysis(Base):
+    __tablename__ = "analyses"
 
     id = Column(Integer, primary_key=True, index=True)
-    notebook_id = Column(Integer, ForeignKey("notebooks.id"), nullable=False)
-    build_id = Column(String, unique=True, index=True, nullable=False)
-    status = Column(String, default="queued")
-    image_name = Column(String, nullable=False)
-    source_bucket = Column(String, nullable=True)
-    source_object = Column(String, nullable=True)
-    log_url = Column(String, nullable=True)
-    error_message = Column(Text, nullable=True)
+    notebook_id = Column(Integer, ForeignKey("notebooks.id"), unique=True, nullable=False)
+    health_score = Column(Integer, nullable=False)
+    cell_classifications = Column(JSON, nullable=False)
+    issues = Column(JSON, nullable=False)
+    recommendations = Column(JSON, nullable=True)
+    resource_estimates = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    finished_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class Deployment(Base):
@@ -102,13 +103,43 @@ class Deployment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     notebook_id = Column(Integer, ForeignKey("notebooks.id"), nullable=False)
-    build_id = Column(Integer, ForeignKey("builds.id"), nullable=True)
-    service_name = Column(String, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=False)
+    status = Column(String, default="pending")
+    build_id = Column(String, nullable=True)
+    image_url = Column(String, nullable=True)
     service_url = Column(String, nullable=True)
-    revision_name = Column(String, nullable=True)
-    status = Column(String, default="deploying")
-    image_uri = Column(String, nullable=False)
-    traffic_percent = Column(Integer, default=100)
+    region = Column(String, nullable=False)
+    dockerfile_path = Column(String, nullable=True)
+    source_gcs_uri = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
+    build_logs_url = Column(String, nullable=True)
+    build_duration = Column(Integer, nullable=True)
+    admin_api_key = Column(String, nullable=True)
+    github_repo_url = Column(String(512), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     deployed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class DeploymentMetric(Base):
+    __tablename__ = "deployment_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    deployment_id = Column(Integer, ForeignKey("deployments.id"), nullable=False)
+    metric_type = Column(String, nullable=False)
+    value = Column(JSON, nullable=False)
+    recorded_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModelVersion(Base):
+    __tablename__ = "model_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notebook_id = Column(Integer, ForeignKey("notebooks.id", ondelete="CASCADE"), nullable=False)
+    version = Column(Integer, nullable=False)
+    gcs_path = Column(String(512), nullable=False)
+    size_bytes = Column(BigInteger, nullable=True)
+    accuracy = Column(Numeric(5, 2), nullable=True)
+    is_active = Column(Boolean, default=False)
+    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())

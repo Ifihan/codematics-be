@@ -1,0 +1,16 @@
+{
+  "feature_names": [
+    "sepal length (cm)",
+    "sepal width (cm)",
+    "petal length (cm)",
+    "petal width (cm)"
+  ],
+  "target_names": [
+    "setosa",
+    "versicolor",
+    "virginica"
+  ],
+  "accuracy": 1.0,
+  "n_samples": 150,
+  "n_features": 4
+}

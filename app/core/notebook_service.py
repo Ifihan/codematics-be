@@ -1,64 +1,80 @@
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
 import shutil
+import tempfile
+import os
+
+from sqlalchemy.orm import Session
 from app.core.parser import NotebookParser
 from app.core.dependencies import DependencyExtractor
 from app.db.models import Notebook
-from sqlalchemy.orm import Session
+from app.core.storage import StorageService
+from app.core.gemini import GeminiService
 
 
 class NotebookService:
     """Service for notebook processing operations"""
 
-    def __init__(self, storage_base_path: str = "storage/notebooks"):
-        """Initialize with storage base path"""
-        self.storage_base_path = Path(storage_base_path)
-        self.storage_base_path.mkdir(parents=True, exist_ok=True)
+    def __init__(self):
+        self.storage = StorageService()
+        self.gemini = GeminiService()
 
-    def get_user_storage_path(self, user_id: int) -> Path:
-        """Get storage path for a specific user"""
-        path = self.storage_base_path / str(user_id)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def get_notebook_storage_path(self, user_id: int, notebook_id: int) -> Path:
-        """Get storage path for a specific notebook"""
-        path = self.get_user_storage_path(user_id) / str(notebook_id)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def save_uploaded_file(
-        self,
-        file_content: bytes,
-        filename: str,
-        user_id: int,
-        notebook_id: int
-    ) -> str:
-        """Save uploaded notebook file"""
-        storage_path = self.get_notebook_storage_path(user_id, notebook_id)
-        file_path = storage_path / filename
-
-        with open(file_path, 'wb') as f:
-            f.write(file_content)
-
-        return str(file_path)
+    def save_uploaded_file(self, content: bytes, filename: str, user_id: int, notebook_id: int) -> str:
+        """Save uploaded notebook file to GCS"""
+        blob_name = f"notebooks/{user_id}/{notebook_id}/{filename}"
+        return self.storage.upload_from_bytes(content, blob_name, content_type="application/json")
 
     def parse_notebook(self, notebook: Notebook, db: Session) -> dict:
         """Parse notebook and extract dependencies"""
-        notebook_path = notebook.file_path
-        output_dir = Path(notebook.file_path).parent
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Handle GCS file path
+            if notebook.file_path.startswith("gs://"):
+                blob_name = self.storage.parse_gcs_uri(notebook.file_path)
+                local_notebook_path = tmp_path / notebook.filename
+                self.storage.download_file(blob_name, str(local_notebook_path))
+            else:
+                # Fallback for legacy local files
+                local_notebook_path = Path(notebook.file_path)
+                if not local_notebook_path.exists():
+                    raise FileNotFoundError(f"Notebook file not found: {notebook.file_path}")
 
-        parser = NotebookParser(notebook_path)
-        parse_result = parser.parse(str(output_dir))
+            # Parse notebook
+            parse_result = NotebookParser(str(local_notebook_path)).parse(str(tmp_path))
 
-        extractor = DependencyExtractor(file_path=parse_result['main_py_path'])
-        deps_result = extractor.analyze(str(output_dir))
+            # Extract dependencies
+            deps_result = DependencyExtractor(file_path=parse_result['main_py_path']).analyze(str(tmp_path))
 
-        # Inject startup code if needed
-        if deps_result.get('has_fastapi_app') and not deps_result.get('has_uvicorn_run'):
-            app_name = deps_result.get('fastapi_app_name', 'app')
-            startup_code = f"""
+            # Analyze with Gemini and Generate FastAPI App if model detected
+            try:
+                notebook_content = parse_result['main_py_content']
+                dependencies = deps_result['dependencies']
+                
+                analysis = self.gemini.analyze_notebook(notebook_content, dependencies)
+                
+                if analysis['model_info']['has_model']:
+                    generated_code = self.gemini.generate_fastapi_app(notebook_content, analysis['model_info'])
+                    
+                    # Overwrite main.py with generated FastAPI app
+                    main_py_path = Path(parse_result['main_py_path'])
+                    main_py_path.write_text(generated_code)
+                    
+                    # Re-analyze dependencies for the new app
+                    deps_result = DependencyExtractor(file_path=str(main_py_path)).analyze(str(tmp_path))
+                    
+                    # Update parse result content
+                    parse_result['main_py_content'] = generated_code
+            except Exception as e:
+                print(f"Gemini generation failed: {e}")
+                # Fallback to original parsing if generation fails
+                pass
+
+            # Auto-inject uvicorn startup for FastAPI apps
+            if deps_result['has_fastapi_app'] and not deps_result['has_uvicorn_run']:
+                app_name = deps_result['fastapi_app_name'] or 'app'
+                startup_code = f'''
 
 # Auto-generated startup code
 if __name__ == "__main__":
@@ -66,54 +82,61 @@ if __name__ == "__main__":
     import os
     port = int(os.getenv("PORT", 8080))
     uvicorn.run({app_name}, host="0.0.0.0", port=port)
-"""
-            with open(parse_result['main_py_path'], 'a', encoding='utf-8') as f:
-                f.write(startup_code)
+'''
+                # Append startup code
+                main_py = Path(parse_result['main_py_path'])
+                main_py.write_text(main_py.read_text() + startup_code)
+
+                # Add uvicorn to dependencies
+                if 'uvicorn' not in deps_result['dependencies']:
+                    deps_result['dependencies'].append('uvicorn')
+                    deps_result['dependencies'].sort()
+
+                    # Update requirements.txt
+                    req_path = Path(deps_result['requirements_txt_path'])
+                    req_path.write_text("\n".join(deps_result['dependencies']) + "\n")
+
+            # Generate Procfile
+            (tmp_path / "Procfile").write_text("web: python main.py")
+
+            # Upload generated files to GCS
+            user_id = notebook.user_id
+            nb_id = notebook.id
             
-            # Ensure uvicorn is in requirements
-            if 'uvicorn' not in deps_result['dependencies']:
-                deps_result['dependencies'].append('uvicorn')
-                deps_result['dependencies'].sort()
-                
-                # Regenerate requirements.txt
-                req_path = deps_result['requirements_txt_path']
-                if req_path:
-                    with open(req_path, 'w', encoding='utf-8') as f:
-                        f.write("\n".join(deps_result['dependencies']) + "\n")
+            main_py_blob = f"notebooks/{user_id}/{nb_id}/main.py"
+            req_txt_blob = f"notebooks/{user_id}/{nb_id}/requirements.txt"
+            
+            main_py_gcs = self.storage.upload_file(parse_result['main_py_path'], main_py_blob)
+            req_txt_gcs = self.storage.upload_file(deps_result['requirements_txt_path'], req_txt_blob)
 
-        # Generate Procfile
-        procfile_path = output_dir / "Procfile"
-        with open(procfile_path, 'w', encoding='utf-8') as f:
-            f.write("web: python main.py")
+            # Update notebook record
+            notebook.status = "parsed"
+            notebook.main_py_path = main_py_gcs
+            notebook.requirements_txt_path = req_txt_gcs
+            notebook.dependencies = deps_result['dependencies']
+            notebook.code_cells_count = parse_result['code_cells_count']
+            notebook.syntax_valid = parse_result['syntax_valid']
+            notebook.parsed_at = datetime.utcnow()
+            db.commit()
+            db.refresh(notebook)
 
-        notebook.status = "parsed"
-        notebook.main_py_path = parse_result['main_py_path']
-        notebook.requirements_txt_path = deps_result['requirements_txt_path']
-        notebook.dependencies = deps_result['dependencies']
-        notebook.code_cells_count = parse_result['code_cells_count']
-        notebook.syntax_valid = parse_result['syntax_valid']
-        notebook.parsed_at = datetime.utcnow()
+            # Update result paths to GCS for consistency
+            parse_result['main_py_path'] = main_py_gcs
+            deps_result['requirements_txt_path'] = req_txt_gcs
 
-        db.commit()
-        db.refresh(notebook)
-
-        return {
-            "parse_result": parse_result,
-            "deps_result": deps_result,
-            "notebook": notebook
-        }
-
-    def get_file_content(self, file_path: str) -> Optional[bytes]:
-        """Read file content as bytes"""
-        path = Path(file_path)
-        if not path.exists():
-            return None
-
-        with open(path, 'rb') as f:
-            return f.read()
+            return {"parse_result": parse_result, "deps_result": deps_result, "notebook": notebook}
 
     def delete_notebook_files(self, notebook: Notebook):
-        """Delete all files associated with a notebook"""
-        notebook_dir = Path(notebook.file_path).parent
-        if notebook_dir.exists():
-            shutil.rmtree(notebook_dir)
+        """Delete all files associated with notebook from GCS"""
+        # Helper to delete if GCS URI
+        def delete_if_gcs(path):
+            if path and path.startswith("gs://"):
+                try:
+                    blob_name = self.storage.parse_gcs_uri(path)
+                    self.storage.delete_blob(blob_name)
+                except Exception:
+                    pass # Ignore if already deleted or not found
+
+        delete_if_gcs(notebook.file_path)
+        delete_if_gcs(notebook.main_py_path)
+        delete_if_gcs(notebook.requirements_txt_path)

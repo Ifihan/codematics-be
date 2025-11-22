@@ -41,3 +41,5 @@ gcp-key-base64.txt
 .DS_Store
 
 uploads/
+exempts/
+notebook-to-cloud-deploy.pem

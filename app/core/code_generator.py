@@ -1,0 +1,332 @@
+from typing import List, Dict, Any
+
+
+class CodeGenerator:
+    def generate_fastapi_wrapper(
+        self,
+        notebook_name: str,
+        dependencies: List[str],
+        cell_classifications: List[Dict[str, Any]],
+        use_gcs_model: bool = True,
+        model_info: Dict[str, Any] = None
+    ) -> str:
+        has_ml_model = (model_info and model_info.get("has_model")) or any("training" in c.get("type", "") for c in cell_classifications)
+
+        if model_info is None:
+            model_info = {}
+
+        imports = """from fastapi import FastAPI, HTTPException, Header
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
+from typing import Any
+from datetime import datetime
+import main
+"""
+
+        if has_ml_model and use_gcs_model:
+            imports += """import os
+import pickle
+from google.cloud import storage
+"""
+
+        app_code = f"""
+app = FastAPI(title="{notebook_name} API")
+"""
+
+        if has_ml_model and use_gcs_model:
+            app_code += """
+_model = None
+
+def load_model():
+    client = storage.Client()
+    bucket_name = os.getenv("GCS_BUCKET")
+    model_path = os.getenv("MODEL_GCS_PATH")
+
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(model_path)
+
+    model_bytes = blob.download_as_bytes()
+    return pickle.loads(model_bytes)
+
+@app.on_event("startup")
+def startup():
+    global _model
+    _model = load_model()
+
+@app.post("/admin/reload-model")
+def reload_model(x_api_key: str = Header(...)):
+    expected_key = os.getenv("ADMIN_API_KEY")
+    if not expected_key or x_api_key != expected_key:
+        raise HTTPException(401, "Invalid API key")
+
+    global _model
+    _model = load_model()
+    return {"status": "reloaded", "timestamp": datetime.utcnow().isoformat()}
+"""
+
+        app_code += """
+@app.get("/")
+def root():
+    return RedirectResponse(url="/docs")
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+"""
+
+        if has_ml_model:
+            output_type = model_info.get("output_type", "classification")
+            n_features = model_info.get("n_features", 0)
+            feature_names = model_info.get("feature_names", [])
+            class_names = model_info.get("class_names", [])
+            prediction_method = model_info.get("prediction_method", "predict")
+
+            if feature_names and len(feature_names) == n_features:
+                request_fields = "\n    ".join([f"{name}: float" for name in feature_names])
+                features_array = f"[{', '.join([f'request.{name}' for name in feature_names])}]"
+            elif n_features > 0:
+                request_fields = f"features: list[float]  # Expects {n_features} features"
+                features_array = "request.features"
+            else:
+                request_fields = "features: list"
+                features_array = "request.features"
+
+            if output_type == "classification" and class_names:
+                response_fields = """prediction: Any
+    confidence: float = None
+    probabilities: dict = None"""
+                prediction_logic = f"""
+    import numpy as np
+    X = np.array([{features_array}])
+
+    prediction = _model.{prediction_method}(X)[0]
+
+    has_proba = hasattr(_model, 'predict_proba')
+    probabilities = _model.predict_proba(X)[0] if has_proba else None
+
+    class_names = {class_names}
+    pred_label = class_names[int(prediction)] if isinstance(prediction, (int, np.integer)) and len(class_names) > 0 else str(prediction)
+
+    return {{
+        "prediction": pred_label,
+        "confidence": float(max(probabilities)) if probabilities is not None else None,
+        "probabilities": dict(zip(class_names, probabilities.tolist())) if probabilities is not None and len(class_names) > 0 else None
+    }}"""
+            elif output_type == "regression":
+                response_fields = """value: float
+    prediction: Any"""
+                prediction_logic = f"""
+    import numpy as np
+    X = np.array([{features_array}])
+    result = _model.{prediction_method}(X)[0]
+
+    return {{
+        "value": float(result),
+        "prediction": float(result)
+    }}"""
+            else:
+                response_fields = "prediction: Any"
+                prediction_logic = f"""
+    import numpy as np
+    X = np.array([{features_array}])
+    result = _model.{prediction_method}(X)
+
+    return {{"prediction": result.tolist() if hasattr(result, 'tolist') else result}}"""
+
+            app_code += f"""
+class PredictionRequest(BaseModel):
+    {request_fields}
+
+class PredictionResponse(BaseModel):
+    {response_fields}
+
+@app.post("/predict", response_model=PredictionResponse)
+def predict(request: PredictionRequest):
+    global _model
+    if _model is None:
+        raise HTTPException(503, "Model not loaded")
+    try:{prediction_logic}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+"""
+
+        return imports + app_code
+
+    def generate_streamlit_wrapper(self, notebook_name: str) -> str:
+        return f"""import streamlit as st
+import main
+
+st.set_page_config(page_title="{notebook_name}", layout="wide")
+
+st.title("{notebook_name}")
+st.write("Deployed from Jupyter Notebook")
+
+if __name__ == "__main__":
+    main.main()
+"""
+
+    def generate_readme(
+        self,
+        notebook_name: str,
+        dependencies: List[str],
+        app_type: str,
+        service_url: str = None
+    ) -> str:
+        deploy_info = f"\n## Live Deployment\n\nService URL: {service_url}\n" if service_url else ""
+
+        return f"""# {notebook_name}
+
+Generated from Jupyter Notebook using NotebookDeploy
+
+## Files
+
+- `main.py` - Converted notebook code
+- `requirements.txt` - Python dependencies
+- `Dockerfile` - Container configuration
+- `app.py` - {"FastAPI" if app_type == "fastapi" else "Streamlit"} wrapper
+- `docker-compose.yml` - Local development setup
+- `deploy.sh` - Deployment script
+{deploy_info}
+## Local Development
+
+### Using Docker Compose
+
+```bash
+docker-compose up
+```
+
+Access at: http://localhost:8080
+
+### Using Python
+
+```bash
+python -m venv venv
+source venv/bin/activate  # or venv\\Scripts\\activate on Windows
+pip install -r requirements.txt
+{"uvicorn app:app --reload" if app_type == "fastapi" else "streamlit run app.py"}
+```
+
+## Dependencies
+
+{chr(10).join(f"- {dep}" for dep in dependencies)}
+
+## Deployment
+
+### Google Cloud Run
+
+```bash
+./deploy.sh
+```
+
+### Manual Docker Build
+
+```bash
+docker build -t {notebook_name.lower()} .
+docker run -p 8080:8080 {notebook_name.lower()}
+```
+
+## API Documentation
+
+{"Visit /docs for interactive API documentation" if app_type == "fastapi" else "Streamlit UI available at root path"}
+"""
+
+    def generate_docker_compose(
+        self,
+        notebook_name: str,
+        app_type: str
+    ) -> str:
+        return f"""version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app
+    {"command: uvicorn app:app --host 0.0.0.0 --port 8080 --reload" if app_type == "fastapi" else 'command: streamlit run app.py --server.port=8080 --server.address=0.0.0.0'}
+"""
+
+    def generate_deploy_script(
+        self,
+        notebook_name: str,
+        project_id: str,
+        region: str,
+        artifact_registry: str
+    ) -> str:
+        service_name = notebook_name.lower().replace("_", "-")
+        image_name = f"{artifact_registry}/{service_name}:latest"
+
+        return f"""#!/bin/bash
+set -e
+
+PROJECT_ID="{project_id}"
+REGION="{region}"
+SERVICE_NAME="{service_name}"
+IMAGE_NAME="{image_name}"
+
+echo "Building Docker image..."
+docker build -t $IMAGE_NAME .
+
+echo "Pushing to Artifact Registry..."
+docker push $IMAGE_NAME
+
+echo "Deploying to Cloud Run..."
+gcloud run deploy $SERVICE_NAME \\
+  --image $IMAGE_NAME \\
+  --platform managed \\
+  --region $REGION \\
+  --allow-unauthenticated \\
+  --project $PROJECT_ID
+
+echo "Deployment complete!"
+gcloud run services describe $SERVICE_NAME --region $REGION --project $PROJECT_ID --format="value(status.url)"
+"""
+
+    def generate_gitignore(self) -> str:
+        return """__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.env
+.venv
+*.ipynb_checkpoints
+.DS_Store
+*.log
+"""
+
+    def generate_test_file(self, notebook_name: str, app_type: str) -> str:
+        if app_type == "fastapi":
+            return """from fastapi.testclient import TestClient
+from app import app
+
+client = TestClient(app)
+
+def test_root():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "message" in response.json()
+
+def test_health():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+"""
+        else:
+            return f"""import pytest
+from pathlib import Path
+
+def test_main_exists():
+    assert Path("main.py").exists()
+
+def test_app_exists():
+    assert Path("app.py").exists()
+
+def test_requirements_exists():
+    assert Path("requirements.txt").exists()
+"""

@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from app.config import settings
-from app.api.v1 import auth, notebooks, builds, deployments, webhooks, metrics, admin, pipeline
+from app.api import v1
 from app.db.database import Base, engine
+from app.middleware import RateLimitMiddleware, RequestLoggingMiddleware, ErrorHandlerMiddleware
 
 app = FastAPI(
     title=settings.app_name,
@@ -12,12 +14,14 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database on startup (non-blocking)"""
     try:
         Base.metadata.create_all(bind=engine)
     except Exception as e:
-        # Log error but don't fail startup
         print(f"Warning: Database initialization failed: {e}")
+
+app.add_middleware(ErrorHandlerMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=100)
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,24 +31,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(notebooks.router, prefix="/api/v1")
-app.include_router(builds.router, prefix="/api/v1")
-app.include_router(deployments.router, prefix="/api/v1")
-app.include_router(webhooks.router, prefix="/api/v1")
-app.include_router(metrics.router, prefix="/api/v1")
-app.include_router(admin.router, prefix="/api/v1")
-app.include_router(pipeline.router, prefix="/api/v1")
+app.include_router(v1.router)
 
 
 @app.get("/")
 def root():
-    """Root endpoint"""
-    return {
-        "name": settings.app_name,
-        "version": settings.app_version,
-        "status": "running"
-    }
+    """Redirect to API documentation"""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health")
