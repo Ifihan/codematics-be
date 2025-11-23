@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.db.database import get_db
 from app.db.models import User, Notebook, Analysis, Deployment
@@ -19,7 +19,7 @@ def get_github_service_with_refresh(user: User, db: Session) -> GitHubService:
         raise HTTPException(400, "GitHub not connected")
 
     if user.github_token_expires_at and user.github_refresh_token:
-        if datetime.utcnow() >= user.github_token_expires_at - timedelta(minutes=5):
+        if datetime.now(timezone.utc) >= user.github_token_expires_at - timedelta(minutes=5):
             github = GitHubService()
             token_data = github.refresh_access_token(user.github_refresh_token)
 
@@ -44,15 +44,20 @@ class CreateRepoRequest(BaseModel):
 
 
 @router.get("/oauth/authorize")
-def authorize():
+def authorize(current_user: User = Depends(get_current_user)):
     if not settings.github_client_id:
         raise HTTPException(500, "GitHub OAuth not configured")
+
+    import base64
+    import json
+    state = base64.urlsafe_b64encode(json.dumps({"user_id": current_user.id}).encode()).decode()
 
     auth_url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={settings.github_client_id}"
         f"&redirect_uri={settings.github_redirect_uri}"
         f"&scope=repo,workflow"
+        f"&state={state}"
     )
     return {"url": auth_url}
 
@@ -60,12 +65,21 @@ def authorize():
 @router.get("/oauth/callback")
 def callback(
     code: str = Query(...),
-    current_user: User = Depends(get_current_user),
+    state: str = Query(...),
     db: Session = Depends(get_db)
 ):
-    github = GitHubService()
+    import base64
+    import json
 
     try:
+        state_data = json.loads(base64.urlsafe_b64decode(state).decode())
+        user_id = state_data.get("user_id")
+
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if not current_user:
+            raise HTTPException(404, "User not found")
+
+        github = GitHubService()
         token_data = github.exchange_code_for_token(code)
         access_token = token_data.get("access_token")
         refresh_token = token_data.get("refresh_token")
@@ -102,6 +116,22 @@ def get_status(current_user: User = Depends(get_current_user)):
     )
 
 
+@router.get("/scopes")
+def get_scopes(current_user: User = Depends(get_current_user)):
+    if not current_user.github_token:
+        raise HTTPException(400, "GitHub not connected")
+
+    github = GitHubService(current_user.github_token)
+    scopes = github.get_token_scopes()
+
+    return {
+        "scopes": scopes,
+        "has_repo_access": "repo" in scopes or "public_repo" in scopes,
+        "required_scopes": ["repo", "workflow"],
+        "needs_reauth": "repo" not in scopes
+    }
+
+
 @router.post("/disconnect")
 def disconnect(
     current_user: User = Depends(get_current_user),
@@ -109,6 +139,8 @@ def disconnect(
 ):
     current_user.github_token = None
     current_user.github_username = None
+    current_user.github_refresh_token = None
+    current_user.github_token_expires_at = None
     db.commit()
     return {"message": "GitHub disconnected"}
 
@@ -131,7 +163,15 @@ def create_repo(
     analysis = db.query(Analysis).filter_by(notebook_id=request.notebook_id).first()
 
     try:
-        result = export_service.push_to_github(notebook, current_user, analysis, db)
+        result = export_service.push_to_github(
+            notebook=notebook,
+            user=current_user,
+            analysis=analysis,
+            db=db,
+            repo_name=request.repo_name,
+            description=request.description,
+            private=request.private
+        )
 
         deployment = db.query(Deployment).filter(
             Deployment.notebook_id == request.notebook_id

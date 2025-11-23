@@ -119,18 +119,26 @@ class ExportService:
         notebook: Notebook,
         user: User,
         analysis: Optional[Analysis] = None,
-        db: Optional[Session] = None
+        db: Optional[Session] = None,
+        repo_name: Optional[str] = None,
+        description: Optional[str] = None,
+        private: bool = False
     ) -> Dict[str, Any]:
         if not user.github_token or not user.github_username:
             raise ValueError("GitHub not connected. User must authenticate with GitHub first.")
 
         github = GitHubService(user.github_token)
-        repo_name = f"{notebook.name.lower().replace(' ', '-')}-deployment"
+
+        if not repo_name:
+            repo_name = f"{notebook.name.lower().replace(' ', '-')}-deployment"
+
+        if not description:
+            description = f"Deployment for {notebook.name} notebook"
 
         repo = github.create_repo(
             name=repo_name,
-            description=f"Deployment for {notebook.name} notebook",
-            private=False
+            description=description,
+            private=private
         )
 
         owner = user.github_username

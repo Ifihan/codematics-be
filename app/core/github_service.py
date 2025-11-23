@@ -1,6 +1,6 @@
 import requests
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.config import settings
 
 
@@ -31,7 +31,7 @@ class GitHubService:
         token_data = response.json()
 
         if "expires_in" in token_data:
-            token_data["expires_at"] = datetime.utcnow() + timedelta(seconds=token_data["expires_in"])
+            token_data["expires_at"] = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
 
         return token_data
 
@@ -50,7 +50,7 @@ class GitHubService:
         token_data = response.json()
 
         if "expires_in" in token_data:
-            token_data["expires_at"] = datetime.utcnow() + timedelta(seconds=token_data["expires_in"])
+            token_data["expires_at"] = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
 
         return token_data
 
@@ -58,6 +58,11 @@ class GitHubService:
         response = requests.get(f"{self.BASE_URL}/user", headers=self.headers)
         response.raise_for_status()
         return response.json()
+
+    def get_token_scopes(self) -> list[str]:
+        response = requests.get(f"{self.BASE_URL}/user", headers=self.headers)
+        scopes_header = response.headers.get("X-OAuth-Scopes", "")
+        return [s.strip() for s in scopes_header.split(",") if s.strip()]
 
     def create_repo(self, name: str, description: str = "", private: bool = False) -> Dict[str, Any]:
         data = {
@@ -67,6 +72,15 @@ class GitHubService:
             "auto_init": True
         }
         response = requests.post(f"{self.BASE_URL}/user/repos", json=data, headers=self.headers)
+
+        if response.status_code == 403:
+            scopes = self.get_token_scopes()
+            raise Exception(
+                f"GitHub token lacks required permissions. "
+                f"Current scopes: {scopes}. Required: 'repo' or 'public_repo'. "
+                f"Please reconnect GitHub with proper permissions."
+            )
+
         response.raise_for_status()
         return response.json()
 
