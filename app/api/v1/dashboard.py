@@ -142,7 +142,7 @@ def get_dashboard(
     ).first()
 
     health_overview = HealthOverview(
-        average_health_score=float(health_stats.avg_health) if health_stats.avg_health else 0.0,
+        average_health_score=round(float(health_stats.avg_health), 2) if health_stats.avg_health else 0.0,
         notebooks_analyzed=health_stats.total_analyzed or 0,
         notebooks_with_issues=health_stats.with_issues or 0
     )
@@ -162,14 +162,14 @@ def get_dashboard(
 
     total_deps = deployment_stats_query.total or 0
     successful_deps = deployment_stats_query.successful or 0
-    success_rate = (successful_deps / total_deps * 100) if total_deps > 0 else 0.0
+    success_rate = (float(successful_deps) / float(total_deps) * 100.0) if total_deps > 0 else 0.0
 
     deployment_stats = DeploymentStats(
         success_rate=round(success_rate, 2),
-        average_build_time=float(deployment_stats_query.avg_build_time) if deployment_stats_query.avg_build_time else 0.0,
-        total_build_time=float(deployment_stats_query.total_build_time) if deployment_stats_query.total_build_time else 0.0,
-        fastest_deployment=float(deployment_stats_query.fastest) if deployment_stats_query.fastest else None,
-        slowest_deployment=float(deployment_stats_query.slowest) if deployment_stats_query.slowest else None
+        average_build_time=round(float(deployment_stats_query.avg_build_time), 2) if deployment_stats_query.avg_build_time else 0.0,
+        total_build_time=round(float(deployment_stats_query.total_build_time), 2) if deployment_stats_query.total_build_time else 0.0,
+        fastest_deployment=round(float(deployment_stats_query.fastest), 2) if deployment_stats_query.fastest else None,
+        slowest_deployment=round(float(deployment_stats_query.slowest), 2) if deployment_stats_query.slowest else None
     )
 
     return DashboardResponse(

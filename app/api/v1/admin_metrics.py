@@ -59,7 +59,7 @@ def get_system_metrics(
     total_storage_bytes = db.query(
         func.sum(ModelVersion.size_bytes)
     ).scalar() or 0
-    total_storage_mb = total_storage_bytes / (1024 * 1024)
+    total_storage_mb = float(total_storage_bytes) / (1024.0 * 1024.0)
 
     # Average health score
     avg_health = db.query(
@@ -188,7 +188,7 @@ def get_deployments_overview(
     ).count()
 
     # Success rate
-    success_rate = (successful_deployments / total_deployments * 100) if total_deployments > 0 else 0.0
+    success_rate = (float(successful_deployments) / float(total_deployments) * 100.0) if total_deployments > 0 else 0.0
 
     # Build time stats
     build_stats = db.query(
@@ -199,7 +199,7 @@ def get_deployments_overview(
     ).first()
 
     total_build_time_seconds = build_stats.total or 0
-    total_build_time_hours = total_build_time_seconds / 3600
+    total_build_time_hours = float(total_build_time_seconds) / 3600.0
     avg_build_time_seconds = build_stats.average or 0
 
     # Recent deployments
