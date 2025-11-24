@@ -156,6 +156,7 @@ def process_deployment(deployment_id: int, db_url: str):
             env_vars = {
                 "GCS_BUCKET": settings.gcp_bucket_name,
                 "MODEL_GCS_PATH": active_model.gcs_path.replace(f"gs://{settings.gcp_bucket_name}/", ""),
+                "MODEL_FILE_EXTENSION": active_model.file_extension or "pkl",
                 "ADMIN_API_KEY": admin_api_key,
                 "GCP_PROJECT_ID": settings.gcp_project_id
             }
