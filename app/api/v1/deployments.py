@@ -167,7 +167,8 @@ def process_deployment(deployment_id: int, db_url: str):
             env_vars=env_vars if env_vars else None
         )
 
-        deployment.service_url = cloud_run.get_service_url(deployment.name)
+        base_service_url = cloud_run.get_service_url(deployment.name)
+        deployment.service_url = f"{base_service_url}/docs"
         deployment.status = "deployed"
         deployment.deployed_at = datetime.utcnow()
         db.commit()
@@ -357,7 +358,11 @@ def reload_model(
     if not deployment.admin_api_key:
         raise HTTPException(500, "Admin API key not configured")
 
-    reload_url = f"{deployment.service_url}/admin/reload-model"
+    # Extract base URL (remove /docs suffix if present)
+    base_url = deployment.service_url
+    if base_url.endswith("/docs"):
+        base_url = base_url[:-5]  # Remove the last 5 characters ("/docs")
+    reload_url = f"{base_url}/admin/reload-model"
     headers = {"X-API-Key": deployment.admin_api_key}
 
     for attempt in range(3):
