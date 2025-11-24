@@ -40,6 +40,12 @@ class User(Base):
     github_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     github_username = Column(String, nullable=True)
 
+    # Profile fields
+    bio = Column(Text, nullable=True)
+    primary_stack = Column(String(512), nullable=True)  # e.g., "PyTorch, TensorFlow, Scikit-learn"
+    research_interests = Column(Text, nullable=True)  # e.g., "Computer Vision, NLP, Reinforcement Learning"
+    is_profile_public = Column(Boolean, default=False)
+
     roles = relationship("Role", secondary=user_roles, backref="users")
 
 
