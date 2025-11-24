@@ -61,7 +61,7 @@ def get_deployment_metrics(
             deployment_id=d.id,
             name=d.name,
             status=d.status,
-            build_duration=float(d.build_duration) if d.build_duration else None,
+            build_duration=round(float(d.build_duration), 2) if d.build_duration else None,
             created_at=d.created_at,
             deployed_at=d.deployed_at,
             error_message=d.error_message
@@ -73,7 +73,7 @@ def get_deployment_metrics(
     total_count = len(deployments)
     successful_count = sum(1 for d in deployments if d.status == "deployed")
     failed_count = sum(1 for d in deployments if d.status == "failed")
-    success_rate = (successful_count / total_count * 100) if total_count > 0 else 0.0
+    success_rate = (float(successful_count) / float(total_count) * 100.0) if total_count > 0 else 0.0
 
     build_durations = [d.build_duration for d in deployments if d.build_duration]
     avg_build_duration = sum(build_durations) / len(build_durations) if build_durations else 0.0
@@ -83,7 +83,7 @@ def get_deployment_metrics(
         successful=successful_count,
         failed=failed_count,
         success_rate=round(success_rate, 2),
-        avg_build_duration=round(avg_build_duration, 2)
+        avg_build_duration=round(float(avg_build_duration), 2)
     )
 
     # Generate time-series data (group by date)
@@ -175,7 +175,7 @@ def get_notebook_health_metrics(
         notebooks=notebook_items,
         distribution=HealthDistribution(**distribution),
         total_notebooks=len(notebooks),
-        average_health_score=round(avg_health_score, 2)
+        average_health_score=round(float(avg_health_score), 2)
     )
 
 
@@ -224,7 +224,7 @@ def get_model_metrics(
             notebook_id=model.notebook_id,
             notebook_name=notebook.name if notebook else "Unknown",
             version=model.version,
-            accuracy=float(model.accuracy) if model.accuracy else None,
+            accuracy=round(float(model.accuracy), 2) if model.accuracy else None,
             file_extension=model.file_extension,
             size_mb=round(size_mb, 2),
             is_active=model.is_active,
@@ -282,7 +282,7 @@ def get_performance_metrics(
             PerformanceMetricItem(
                 metric_id=m.id,
                 metric_type=m.metric_type,
-                value=m.value,
+                value=round(float(m.value), 2) if m.value is not None else None,
                 recorded_at=m.recorded_at
             )
             for m in metrics
@@ -313,7 +313,7 @@ def get_performance_metrics(
             PerformanceMetricItem(
                 metric_id=m.id,
                 metric_type=m.metric_type,
-                value=m.value,
+                value=round(float(m.value), 2) if m.value is not None else None,
                 recorded_at=m.recorded_at
             )
             for m in metrics
