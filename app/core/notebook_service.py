@@ -48,22 +48,23 @@ class NotebookService:
             deps_result = DependencyExtractor(file_path=parse_result['main_py_path']).analyze(str(tmp_path))
 
             # Analyze with Gemini and Generate FastAPI App if model detected
+            analysis = None
             try:
                 notebook_content = parse_result['main_py_content']
                 dependencies = deps_result['dependencies']
-                
+
                 analysis = self.gemini.analyze_notebook(notebook_content, dependencies)
-                
+
                 if analysis['model_info']['has_model']:
                     generated_code = self.gemini.generate_fastapi_app(notebook_content, analysis['model_info'])
-                    
+
                     # Overwrite main.py with generated FastAPI app
                     main_py_path = Path(parse_result['main_py_path'])
                     main_py_path.write_text(generated_code)
-                    
+
                     # Re-analyze dependencies for the new app
                     deps_result = DependencyExtractor(file_path=str(main_py_path)).analyze(str(tmp_path))
-                    
+
                     # Update parse result content
                     parse_result['main_py_content'] = generated_code
             except Exception as e:
@@ -71,30 +72,28 @@ class NotebookService:
                 # Fallback to original parsing if generation fails
                 pass
 
-            # Auto-inject uvicorn startup for FastAPI apps
-            if deps_result['has_fastapi_app'] and not deps_result['has_uvicorn_run']:
-                app_name = deps_result['fastapi_app_name'] or 'app'
-                startup_code = f'''
+            # Note: uvicorn startup code is now included in the Gemini-generated FastAPI app
+            # We no longer need to inject it separately
+            # However, we still need to ensure uvicorn and google-cloud-storage are in dependencies
+            needs_update = False
 
-# Auto-generated startup code
-if __name__ == "__main__":
-    import uvicorn
-    import os
-    port = int(os.getenv("PORT", 8080))
-    uvicorn.run({app_name}, host="0.0.0.0", port=port)
-'''
-                # Append startup code
-                main_py = Path(parse_result['main_py_path'])
-                main_py.write_text(main_py.read_text() + startup_code)
+            if analysis and analysis.get('model_info', {}).get('has_model'):
+                # Add google-cloud-storage for model loading from GCS
+                if 'google-cloud-storage' not in deps_result['dependencies']:
+                    deps_result['dependencies'].append('google-cloud-storage')
+                    needs_update = True
 
-                # Add uvicorn to dependencies
+            if deps_result['has_fastapi_app']:
+                # Add uvicorn for FastAPI apps
                 if 'uvicorn' not in deps_result['dependencies']:
                     deps_result['dependencies'].append('uvicorn')
-                    deps_result['dependencies'].sort()
+                    needs_update = True
 
-                    # Update requirements.txt
-                    req_path = Path(deps_result['requirements_txt_path'])
-                    req_path.write_text("\n".join(deps_result['dependencies']) + "\n")
+            if needs_update:
+                deps_result['dependencies'].sort()
+                # Update requirements.txt
+                req_path = Path(deps_result['requirements_txt_path'])
+                req_path.write_text("\n".join(deps_result['dependencies']) + "\n")
 
             # Generate Procfile
             (tmp_path / "Procfile").write_text("web: python main.py")

@@ -173,25 +173,83 @@ if __name__ == "__main__":
         service_url: str = None
     ) -> str:
         deploy_info = f"\n## Live Deployment\n\nService URL: {service_url}\n" if service_url else ""
+        has_model = 'google-cloud-storage' in dependencies
+
+        # Pre-build strings to avoid backslashes in f-strings
+        main_desc = "Complete FastAPI application with model loading from GCS" if app_type == "fastapi" else "Converted notebook code"
+        env_note = "(configure for model loading)" if has_model else ""
+        config_section = "## Configuration" if has_model else ""
+        docker_env_comment = "# Copy and configure .env first" if has_model else ""
+        docker_cp_command = "cp .env.template .env" if has_model else ""
+        python_env_comment = "# Set environment variables from .env" if has_model else ""
+        python_export = "export $(cat .env | grep -v '^#' | xargs)" if has_model else ""
+        python_command = "python main.py" if app_type == "fastapi" else "streamlit run main.py"
+        deploy_comment = "# Configure .env file first with your GCS bucket and model path" if has_model else ""
+        docker_env_flag = "--env-file .env " if has_model else ""
+        api_docs = "Visit /docs for interactive API documentation" if app_type == "fastapi" else "Streamlit UI available at root path"
+        venv_activate = "source venv/bin/activate  # or venv\\Scripts\\activate on Windows"
+        curl_backslash = "\\"
+
+        config_details = ""
+        if has_model:
+            config_details = """
+Before running, copy `.env.template` to `.env` and configure:
+
+```bash
+cp .env.template .env
+# Edit .env with your actual values
+```
+
+Required environment variables:
+- `GCS_BUCKET`: Your Google Cloud Storage bucket name
+- `MODEL_GCS_PATH`: Path to your model file in GCS
+- `MODEL_FILE_EXTENSION`: Model file extension (pkl, joblib, pth, h5, etc.)
+- `ADMIN_API_KEY`: API key for admin endpoints
+"""
+
+        model_management = ""
+        if has_model:
+            model_management = f"""
+
+## Model Management
+
+### Endpoints
+- `POST /predict` - Make predictions with the loaded model
+- `GET /health` - Health check endpoint
+- `POST /admin/reload-model` - Reload model from GCS (requires x-api-key header)
+
+### Reloading Models
+To reload a new model version without redeploying:
+
+```bash
+curl -X POST https://your-service-url/admin/reload-model {curl_backslash}
+  -H "x-api-key: your-admin-api-key"
+```
+"""
+
+        deps_list = "\n".join(f"- {dep}" for dep in dependencies)
 
         return f"""# {notebook_name}
 
-Generated from Jupyter Notebook using NotebookDeploy
+Generated from Jupyter Notebook using Codematics
 
 ## Files
 
-- `main.py` - Converted notebook code
+- `main.py` - {main_desc}
 - `requirements.txt` - Python dependencies
 - `Dockerfile` - Container configuration
-- `app.py` - {"FastAPI" if app_type == "fastapi" else "Streamlit"} wrapper
+- `.env.template` - Environment variables template {env_note}
 - `docker-compose.yml` - Local development setup
 - `deploy.sh` - Deployment script
 {deploy_info}
+{config_section}{config_details}
 ## Local Development
 
 ### Using Docker Compose
 
 ```bash
+{docker_env_comment}
+{docker_cp_command}
 docker-compose up
 ```
 
@@ -201,33 +259,38 @@ Access at: http://localhost:8080
 
 ```bash
 python -m venv venv
-source venv/bin/activate  # or venv\\Scripts\\activate on Windows
+{venv_activate}
 pip install -r requirements.txt
-{"uvicorn app:app --reload" if app_type == "fastapi" else "streamlit run app.py"}
+{python_env_comment}
+{python_export}
+{python_command}
 ```
 
 ## Dependencies
 
-{chr(10).join(f"- {dep}" for dep in dependencies)}
+{deps_list}
 
 ## Deployment
 
 ### Google Cloud Run
 
 ```bash
+{deploy_comment}
 ./deploy.sh
 ```
+
+The deploy script will automatically load environment variables from `.env` and pass them to Cloud Run.
 
 ### Manual Docker Build
 
 ```bash
 docker build -t {notebook_name.lower()} .
-docker run -p 8080:8080 {notebook_name.lower()}
+docker run -p 8080:8080 {docker_env_flag}{notebook_name.lower()}
 ```
 
 ## API Documentation
 
-{"Visit /docs for interactive API documentation" if app_type == "fastapi" else "Streamlit UI available at root path"}
+{api_docs}{model_management}
 """
 
     def generate_docker_compose(
@@ -242,11 +305,13 @@ services:
     build: .
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
     volumes:
       - .:/app
-    {"command: uvicorn app:app --host 0.0.0.0 --port 8080 --reload" if app_type == "fastapi" else 'command: streamlit run app.py --server.port=8080 --server.address=0.0.0.0'}
+    {"command: python main.py" if app_type == "fastapi" else 'command: streamlit run main.py --server.port=8080 --server.address=0.0.0.0'}
 """
 
     def generate_deploy_script(
@@ -262,6 +327,12 @@ services:
         return f"""#!/bin/bash
 set -e
 
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "Loading environment variables from .env file..."
+    export $(cat .env | grep -v '^#' | xargs)
+fi
+
 PROJECT_ID="{project_id}"
 REGION="{region}"
 SERVICE_NAME="{service_name}"
@@ -274,15 +345,79 @@ echo "Pushing to Artifact Registry..."
 docker push $IMAGE_NAME
 
 echo "Deploying to Cloud Run..."
-gcloud run deploy $SERVICE_NAME \\
-  --image $IMAGE_NAME \\
-  --platform managed \\
-  --region $REGION \\
-  --allow-unauthenticated \\
-  --project $PROJECT_ID
+
+# Build environment variables arguments
+ENV_VARS=""
+if [ ! -z "$GCS_BUCKET" ]; then
+    ENV_VARS="$ENV_VARS,GCS_BUCKET=$GCS_BUCKET"
+fi
+if [ ! -z "$MODEL_GCS_PATH" ]; then
+    ENV_VARS="$ENV_VARS,MODEL_GCS_PATH=$MODEL_GCS_PATH"
+fi
+if [ ! -z "$MODEL_FILE_EXTENSION" ]; then
+    ENV_VARS="$ENV_VARS,MODEL_FILE_EXTENSION=$MODEL_FILE_EXTENSION"
+fi
+if [ ! -z "$ADMIN_API_KEY" ]; then
+    ENV_VARS="$ENV_VARS,ADMIN_API_KEY=$ADMIN_API_KEY"
+fi
+
+# Remove leading comma if exists
+ENV_VARS=${{ENV_VARS#,}}
+
+# Deploy with or without env vars
+if [ ! -z "$ENV_VARS" ]; then
+    echo "Deploying with environment variables..."
+    gcloud run deploy $SERVICE_NAME \\
+      --image $IMAGE_NAME \\
+      --platform managed \\
+      --region $REGION \\
+      --allow-unauthenticated \\
+      --set-env-vars "$ENV_VARS" \\
+      --project $PROJECT_ID
+else
+    echo "Deploying without environment variables..."
+    gcloud run deploy $SERVICE_NAME \\
+      --image $IMAGE_NAME \\
+      --platform managed \\
+      --region $REGION \\
+      --allow-unauthenticated \\
+      --project $PROJECT_ID
+fi
 
 echo "Deployment complete!"
 gcloud run services describe $SERVICE_NAME --region $REGION --project $PROJECT_ID --format="value(status.url)"
+"""
+
+    def generate_env_template(
+        self,
+        notebook_id: int,
+        model_version: int = None,
+        model_file_extension: str = None
+    ) -> str:
+        """Generate .env template file with placeholders for configuration"""
+        model_path = f"models/notebook_{notebook_id}/model.{model_file_extension}" if model_file_extension else f"models/notebook_{notebook_id}/model.pkl"
+
+        return f"""# Google Cloud Storage Configuration
+GCS_BUCKET=your-bucket-name
+MODEL_GCS_PATH={model_path}
+MODEL_FILE_EXTENSION={model_file_extension or 'pkl'}
+
+# API Configuration
+ADMIN_API_KEY=your-secure-api-key-here
+
+# Server Configuration
+PORT=8080
+
+# Instructions:
+# 1. Replace 'your-bucket-name' with your actual GCS bucket name
+# 2. Update MODEL_GCS_PATH if your model is stored at a different path
+# 3. Set MODEL_FILE_EXTENSION based on your model format (pkl, joblib, pth, h5, etc.)
+# 4. Generate a secure ADMIN_API_KEY for the /admin/reload-model endpoint
+# 5. PORT is set to 8080 by default for Cloud Run compatibility
+#
+# For Cloud Run deployment, set these as environment variables in the deployment:
+# gcloud run deploy SERVICE_NAME \\
+#   --set-env-vars GCS_BUCKET=your-bucket-name,MODEL_GCS_PATH={model_path},MODEL_FILE_EXTENSION={model_file_extension or 'pkl'},ADMIN_API_KEY=your-key
 """
 
     def generate_gitignore(self) -> str:
@@ -303,14 +438,14 @@ ENV/
     def generate_test_file(self, notebook_name: str, app_type: str) -> str:
         if app_type == "fastapi":
             return """from fastapi.testclient import TestClient
-from app import app
+from main import app
 
 client = TestClient(app)
 
 def test_root():
     response = client.get("/")
-    assert response.status_code == 200
-    assert "message" in response.json()
+    assert response.status_code == 307  # Redirect to /docs
+    assert response.headers["location"] == "/docs"
 
 def test_health():
     response = client.get("/health")
@@ -324,9 +459,9 @@ from pathlib import Path
 def test_main_exists():
     assert Path("main.py").exists()
 
-def test_app_exists():
-    assert Path("app.py").exists()
-
 def test_requirements_exists():
     assert Path("requirements.txt").exists()
+
+def test_dockerfile_exists():
+    assert Path("Dockerfile").exists()
 """
