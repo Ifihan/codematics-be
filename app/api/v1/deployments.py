@@ -407,12 +407,84 @@ def reload_model(
     raise HTTPException(503, "Model reload failed after 3 attempts")
 
 
+@router.get("/{deployment_id}/logs")
+def get_deployment_logs(
+    deployment_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get build logs for a deployment (REST endpoint).
+
+    Returns the complete log as text or JSON entries.
+    """
+    deployment = db.query(Deployment).filter(
+        Deployment.id == deployment_id,
+        Deployment.user_id == current_user.id
+    ).first()
+
+    if not deployment:
+        raise HTTPException(404, "Deployment not found")
+
+    if not deployment.build_id:
+        raise HTTPException(400, "No build associated with this deployment")
+
+    # Fetch log entries
+    log_entries = cloud_build.fetch_build_log_entries(deployment.build_id)
+
+    return {
+        "deployment_id": deployment.id,
+        "build_id": deployment.build_id,
+        "status": deployment.status,
+        "build_status": cloud_build.get_build_status(deployment.build_id) if deployment.build_id else None,
+        "log_entries": log_entries,
+        "total_entries": len(log_entries)
+    }
+
+
+@router.get("/{deployment_id}/logs/text")
+def get_deployment_logs_text(
+    deployment_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get build logs as plain text.
+
+    Returns logs formatted as a text file.
+    """
+    deployment = db.query(Deployment).filter(
+        Deployment.id == deployment_id,
+        Deployment.user_id == current_user.id
+    ).first()
+
+    if not deployment:
+        raise HTTPException(404, "Deployment not found")
+
+    if not deployment.build_id:
+        raise HTTPException(400, "No build associated with this deployment")
+
+    log_text = cloud_build.fetch_build_log_text(deployment.build_id)
+
+    return {
+        "deployment_id": deployment.id,
+        "build_id": deployment.build_id,
+        "status": deployment.status,
+        "logs": log_text
+    }
+
+
 @router.websocket("/{deployment_id}/logs/stream")
 async def stream_logs(
     websocket: WebSocket,
     deployment_id: int,
     db: Session = Depends(get_db)
 ):
+    """
+    Stream build logs via WebSocket in real-time.
+
+    Sends log entries as they become available during the build.
+    """
     await websocket.accept()
 
     try:
@@ -422,27 +494,55 @@ async def stream_logs(
             await websocket.close()
             return
 
-        last_position = 0
+        last_log_count = 0
         while deployment.status in ["pending", "building", "deploying"]:
             try:
                 build_status = cloud_build.get_build_status(deployment.build_id)
-                logs_url = deployment.build_logs_url
 
-                if logs_url:
-                    await websocket.send_json({
-                        "type": "status",
-                        "status": deployment.status,
-                        "build_status": build_status
-                    })
+                # Fetch new log entries
+                log_entries = cloud_build.fetch_build_log_entries(deployment.build_id)
 
-                if build_status in ["SUCCESS", "FAILURE", "CANCELLED"]:
+                # Send only new logs since last check
+                if len(log_entries) > last_log_count:
+                    new_entries = log_entries[last_log_count:]
+                    for entry in new_entries:
+                        await websocket.send_json({
+                            "type": "log",
+                            "timestamp": entry.get("timestamp"),
+                            "severity": entry.get("severity"),
+                            "message": entry.get("message")
+                        })
+                    last_log_count = len(log_entries)
+
+                # Send status update
+                await websocket.send_json({
+                    "type": "status",
+                    "deployment_status": deployment.status,
+                    "build_status": build_status
+                })
+
+                # Check if build is complete
+                if build_status in ["SUCCESS", "FAILURE", "CANCELLED", "TIMEOUT"]:
+                    # Send final logs
+                    final_logs = cloud_build.fetch_build_log_entries(deployment.build_id)
+                    if len(final_logs) > last_log_count:
+                        final_new = final_logs[last_log_count:]
+                        for entry in final_new:
+                            await websocket.send_json({
+                                "type": "log",
+                                "timestamp": entry.get("timestamp"),
+                                "severity": entry.get("severity"),
+                                "message": entry.get("message")
+                            })
+
                     await websocket.send_json({
                         "type": "complete",
-                        "status": build_status
+                        "build_status": build_status,
+                        "deployment_status": deployment.status
                     })
                     break
 
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)  # Poll every 3 seconds
                 db.refresh(deployment)
 
             except WebSocketDisconnect:
@@ -451,5 +551,5 @@ async def stream_logs(
         await websocket.close()
 
     except Exception as e:
-        await websocket.send_json({"error": str(e)})
+        await websocket.send_json({"type": "error", "message": str(e)})
         await websocket.close()
