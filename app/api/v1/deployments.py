@@ -359,6 +359,25 @@ def reload_model(
     if not deployment.admin_api_key:
         raise HTTPException(500, "Admin API key not configured")
 
+    # Update Cloud Run environment variables with new model info
+    try:
+        env_vars = {
+            "GCS_BUCKET": settings.gcp_bucket_name,
+            "MODEL_GCS_PATH": active_model.gcs_path.replace(f"gs://{settings.gcp_bucket_name}/", ""),
+            "MODEL_FILE_EXTENSION": active_model.file_extension or "pkl",
+            "ADMIN_API_KEY": deployment.admin_api_key,
+            "GCP_PROJECT_ID": settings.gcp_project_id
+        }
+
+        cloud_run.update_service(
+            service_name=deployment.name,
+            image_uri=deployment.image_url,
+            env_vars=env_vars
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to update Cloud Run environment: {str(e)}")
+
+    # Now reload the model in the running container
     # Extract base URL (remove /docs suffix if present)
     base_url = deployment.service_url
     if base_url.endswith("/docs"):
@@ -372,8 +391,10 @@ def reload_model(
             if response.status_code == 200:
                 return {
                     "status": "success",
-                    "message": "Model reloaded",
+                    "message": "Model reloaded with updated environment",
                     "version": active_model.version,
+                    "model_path": active_model.gcs_path,
+                    "file_extension": active_model.file_extension,
                     "timestamp": response.json().get("timestamp")
                 }
             elif response.status_code == 401:
