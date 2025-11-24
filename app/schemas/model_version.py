@@ -13,6 +13,7 @@ class ModelVersionResponse(BaseModel):
     notebook_id: int
     version: int
     gcs_path: str
+    file_extension: Optional[str] = None  # e.g., 'pkl', 'joblib', 'pth', 'h5'
     size_bytes: Optional[int]
     accuracy: Optional[Decimal]
     is_active: bool

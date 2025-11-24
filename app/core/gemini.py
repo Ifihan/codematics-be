@@ -113,24 +113,43 @@ MODEL INFORMATION:
 {json.dumps(model_info, indent=2)}
 
 REQUIREMENTS:
-1. Create a FastAPI app.
-2. Include the necessary code from the notebook to initialize/load the model variable identified in 'model_info'. 
-   - If the notebook trains a model, include that logic (or a simplified version if possible) so the 'model' variable is available.
-   - If the notebook loads a model, keep that logic.
-   - Ensure the model variable is named consistently.
-3. Create a Pydantic model for the input data based on 'model_info' (n_features, feature_names, etc.).
+1. Create a single 'main.py' file with a complete FastAPI application.
+2. CRITICAL: DO NOT train models on the fly. Instead, load a pre-trained model from Google Cloud Storage (GCS).
+   - Use the google-cloud-storage library to download the model.
+   - Use environment variables for configuration: GCS_BUCKET, MODEL_GCS_PATH, MODEL_FILE_EXTENSION
+   - Load the model using the appropriate library (pickle, joblib, torch, tensorflow, etc.) based on MODEL_FILE_EXTENSION
+   - Example for pickle: pickle.loads(blob.download_as_bytes())
+   - Example for joblib: joblib.load(BytesIO(blob.download_as_bytes()))
+   - Example for pytorch: torch.load(BytesIO(blob.download_as_bytes()))
+3. Use os.getenv() for all configuration - DO NOT hardcode:
+   - GCS_BUCKET: The GCS bucket name
+   - MODEL_GCS_PATH: Path to the model file in GCS (e.g., "models/notebook_123/model.pkl")
+   - MODEL_FILE_EXTENSION: File extension (e.g., "pkl", "joblib", "pth", "h5")
+   - ADMIN_API_KEY: API key for admin endpoints
+   - PORT: Server port (default: 8080)
+4. Create a Pydantic model for the input data based on 'model_info' (n_features, feature_names, etc.).
    - If feature names are unknown, use generic names (f1, f2, etc.) or a list of floats.
-4. Create a '/predict' endpoint (POST).
-   - It should accept the Pydantic model.
-   - It should convert input to the format expected by the model (e.g., numpy array, dataframe).
-   - It should return the prediction.
-5. Handle imports properly.
-6. Name the FastAPI instance 'app'.
-7. Do NOT include any 'if __name__ == "__main__":' block or 'uvicorn.run' call. This will be handled by the deployment system.
-8. Ensure the code is clean and handles errors.
+5. Create the following endpoints:
+   - GET / -> redirect to /docs
+   - GET /health -> health check
+   - POST /predict -> prediction endpoint (accepts Pydantic model, returns prediction)
+   - POST /admin/reload-model -> reload model from GCS (requires x-api-key header)
+6. Handle imports properly. Always include:
+   - fastapi, pydantic, uvicorn
+   - google.cloud.storage
+   - os, pickle (or appropriate model loading library)
+   - numpy (if needed for arrays)
+7. Name the FastAPI instance 'app'.
+8. Include a startup event handler to load the model on application startup.
+9. Include a proper if __name__ == "__main__" block with uvicorn.run to start the server:
+   - Use int(os.getenv("PORT", "8080")) for the port (must be an integer)
+   - Use "0.0.0.0" as host for Cloud Run compatibility
+   - Example: uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
+10. Ensure the code is clean, handles errors gracefully, and includes proper exception handling.
 
 OUTPUT FORMAT:
 Return ONLY the Python code for the 'main.py' file. Do not use markdown blocks like ```python. Just the code.
+This should be a COMPLETE, STANDALONE file that combines FastAPI app logic with uvicorn startup code.
 """
         response = self.model.generate_content(prompt)
         text = response.text.strip()

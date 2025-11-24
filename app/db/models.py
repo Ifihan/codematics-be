@@ -139,6 +139,7 @@ class ModelVersion(Base):
     notebook_id = Column(Integer, ForeignKey("notebooks.id", ondelete="CASCADE"), nullable=False)
     version = Column(Integer, nullable=False)
     gcs_path = Column(String(512), nullable=False)
+    file_extension = Column(String(20), nullable=True)  # e.g., 'pkl', 'joblib', 'pth', 'h5'
     size_bytes = Column(BigInteger, nullable=True)
     accuracy = Column(Numeric(5, 2), nullable=True)
     is_active = Column(Boolean, default=False)

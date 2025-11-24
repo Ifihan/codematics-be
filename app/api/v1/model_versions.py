@@ -76,6 +76,7 @@ async def upload_model_version_internal(
         notebook_id=notebook_id,
         version=version,
         gcs_path=gcs_path,
+        file_extension=file_ext.lstrip('.'),  # Store without the dot (e.g., 'pkl', not '.pkl')
         size_bytes=len(content),
         accuracy=Decimal(str(accuracy)) if accuracy else None,
         is_active=True
