@@ -484,23 +484,54 @@ async def stream_logs(
     Stream build logs via WebSocket in real-time.
 
     Sends log entries as they become available during the build.
+
+    Note: This endpoint does not require authentication as the deployment_id
+    acts as a unique identifier. For production, consider adding token-based auth.
     """
     await websocket.accept()
 
     try:
+        # Verify deployment exists
         deployment = db.query(Deployment).filter_by(id=deployment_id).first()
-        if not deployment or not deployment.build_id:
-            await websocket.send_json({"error": "Deployment or build not found"})
+        if not deployment:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Deployment not found"
+            })
             await websocket.close()
             return
 
+        if not deployment.build_id:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Build ID not found. Build may not have started yet."
+            })
+            await websocket.close()
+            return
+
+        # Send initial connection success message
+        await websocket.send_json({
+            "type": "connected",
+            "deployment_id": deployment.id,
+            "build_id": deployment.build_id,
+            "deployment_status": deployment.status,
+            "message": "WebSocket connected. Streaming logs..."
+        })
+
         last_log_count = 0
-        while deployment.status in ["pending", "building", "deploying"]:
+        max_iterations = 200  # Prevent infinite loops (200 * 3s = 10 minutes max)
+        iteration = 0
+
+        # Stream logs until build completes OR deployment finishes
+        while iteration < max_iterations:
             try:
+                iteration += 1
+
+                # Get current build status from GCP
                 build_status = cloud_build.get_build_status(deployment.build_id)
 
-                # Fetch new log entries
-                log_entries = cloud_build.fetch_build_log_entries(deployment.build_id)
+                # Fetch new log entries from Cloud Logging
+                log_entries = cloud_build.fetch_build_log_entries(deployment.build_id, page_size=200)
 
                 # Send only new logs since last check
                 if len(log_entries) > last_log_count:
@@ -513,18 +544,31 @@ async def stream_logs(
                             "message": entry.get("message")
                         })
                     last_log_count = len(log_entries)
+                elif iteration == 1 and len(log_entries) == 0:
+                    # First iteration and no logs yet
+                    await websocket.send_json({
+                        "type": "info",
+                        "message": "Waiting for logs... Cloud Logging may have a slight delay (10-30 seconds)."
+                    })
+
+                # Refresh deployment status from database
+                db.refresh(deployment)
 
                 # Send status update
                 await websocket.send_json({
                     "type": "status",
                     "deployment_status": deployment.status,
-                    "build_status": build_status
+                    "build_status": build_status,
+                    "total_logs": last_log_count
                 })
 
                 # Check if build is complete
                 if build_status in ["SUCCESS", "FAILURE", "CANCELLED", "TIMEOUT"]:
-                    # Send final logs
-                    final_logs = cloud_build.fetch_build_log_entries(deployment.build_id)
+                    # Wait a bit for final logs to propagate to Cloud Logging
+                    await asyncio.sleep(2)
+
+                    # Fetch final logs one more time
+                    final_logs = cloud_build.fetch_build_log_entries(deployment.build_id, page_size=200)
                     if len(final_logs) > last_log_count:
                         final_new = final_logs[last_log_count:]
                         for entry in final_new:
@@ -538,18 +582,53 @@ async def stream_logs(
                     await websocket.send_json({
                         "type": "complete",
                         "build_status": build_status,
-                        "deployment_status": deployment.status
+                        "deployment_status": deployment.status,
+                        "total_logs": len(final_logs),
+                        "message": f"Build {build_status.lower()}. Stream complete."
+                    })
+                    break
+
+                # Also check if deployment reached a terminal state
+                if deployment.status in ["deployed", "failed"]:
+                    await websocket.send_json({
+                        "type": "complete",
+                        "build_status": build_status,
+                        "deployment_status": deployment.status,
+                        "total_logs": last_log_count,
+                        "message": f"Deployment {deployment.status}. Stream complete."
                     })
                     break
 
                 await asyncio.sleep(3)  # Poll every 3 seconds
-                db.refresh(deployment)
 
             except WebSocketDisconnect:
                 break
+            except Exception as e:
+                # Log error but continue streaming
+                await websocket.send_json({
+                    "type": "warning",
+                    "message": f"Error during streaming: {str(e)}"
+                })
+                await asyncio.sleep(3)
+
+        # Check if we hit max iterations
+        if iteration >= max_iterations:
+            await websocket.send_json({
+                "type": "timeout",
+                "message": "Stream timeout after 10 minutes. Please refresh to continue monitoring."
+            })
 
         await websocket.close()
 
+    except WebSocketDisconnect:
+        # Client disconnected - this is normal
+        pass
     except Exception as e:
-        await websocket.send_json({"type": "error", "message": str(e)})
-        await websocket.close()
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Fatal error: {str(e)}"
+            })
+            await websocket.close()
+        except:
+            pass  # WebSocket might already be closed
