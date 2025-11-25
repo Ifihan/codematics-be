@@ -76,8 +76,11 @@ class CloudBuildService:
         Returns a list of log entries with timestamp and message.
         """
         try:
-            # Cloud Build logs are stored in Cloud Logging with this resource name
-            filter_str = f'resource.type="build" AND resource.labels.build_id="{build_id}"'
+            # Get build to access logs
+            build = self.get_build(build_id)
+
+            # Cloud Build writes logs to Cloud Logging under cloud_build resource
+            filter_str = f'resource.type="build" AND labels.build_id="{build_id}"'
 
             entries = self.logging_client.list_entries(
                 filter_=filter_str,
@@ -87,16 +90,48 @@ class CloudBuildService:
 
             log_entries = []
             for entry in entries:
+                # Extract text from structured log
+                if hasattr(entry, 'text_payload') and entry.text_payload:
+                    message = entry.text_payload
+                elif hasattr(entry, 'json_payload') and entry.json_payload:
+                    message = str(entry.json_payload)
+                else:
+                    message = str(entry.payload)
+
                 log_entries.append({
                     "timestamp": entry.timestamp.isoformat() if entry.timestamp else None,
                     "severity": entry.severity,
-                    "message": entry.payload if isinstance(entry.payload, str) else str(entry.payload)
+                    "message": message
+                })
+
+            # If Cloud Logging returns nothing, extract from build steps
+            if not log_entries and build.steps:
+                for i, step in enumerate(build.steps):
+                    log_entries.append({
+                        "timestamp": None,
+                        "severity": "INFO",
+                        "message": f"Step {i+1}: {step.name} {' '.join(step.args)}"
+                    })
+                # Add build status
+                log_entries.append({
+                    "timestamp": None,
+                    "severity": "INFO" if build.status.name == "SUCCESS" else "ERROR",
+                    "message": f"Build Status: {build.status.name}"
                 })
 
             return log_entries
         except Exception as e:
             print(f"Error fetching logs for build {build_id}: {e}")
-            return []
+            # Return build info as fallback
+            try:
+                build = self.get_build(build_id)
+                return [{
+                    "timestamp": None,
+                    "severity": "INFO",
+                    "message": f"Build {build_id} - Status: {build.status.name}. Logs available at: {build.log_url}"
+                }]
+            except:
+                return []
 
     def fetch_build_log_text(self, build_id: str) -> str:
         """
@@ -107,7 +142,11 @@ class CloudBuildService:
         entries = self.fetch_build_log_entries(build_id)
 
         if not entries:
-            return "No logs available yet. Build may still be starting..."
+            try:
+                build = self.get_build(build_id)
+                return f"Build {build_id}\nStatus: {build.status.name}\n\nLogs available at: {build.log_url}\n\nNote: Real-time logs from Cloud Logging are not available. View detailed logs at the URL above."
+            except:
+                return "No logs available yet. Build may still be starting..."
 
         log_lines = []
         for entry in entries:
@@ -115,6 +154,9 @@ class CloudBuildService:
             message = entry.get("message", "")
             severity = entry.get("severity", "INFO")
 
-            log_lines.append(f"[{timestamp}] [{severity}] {message}")
+            if timestamp:
+                log_lines.append(f"[{timestamp}] [{severity}] {message}")
+            else:
+                log_lines.append(f"[{severity}] {message}")
 
         return "\n".join(log_lines)
