@@ -32,6 +32,15 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+class AccessTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
 class TokenData(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None

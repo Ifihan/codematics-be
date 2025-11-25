@@ -38,7 +38,11 @@ class Settings(BaseSettings):
     gemini_temperature: float = 0.2
     gemini_max_tokens: int = 8192
 
-    allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
+    allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "https://aether-860155021919.us-central1.run.app"
+    ]
 
     github_app_id: Optional[str] = None
     github_client_id: Optional[str] = None
